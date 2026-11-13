@@ -5,7 +5,9 @@ Construite avec **Tauri 2** (Rust) + **React 19** + **TypeScript** + **TailwindC
 
 L'agent au guichet travaille **100 % au clavier** : appeler le suivant, marquer un
 absent, transférer un ticket, mettre le guichet en pause — sans jamais lâcher le clavier.
-L'application reste utilisable **hors ligne** et resynchronise automatiquement.
+En cas de coupure réseau, le guichet termine le ticket en cours et les actions déjà
+engagées sont rejouées automatiquement ; les nouveaux appels attendent le retour
+du serveur.
 
 ---
 
@@ -134,19 +136,31 @@ le coffre OS. Dans un navigateur (dev), elle bascule sur des fallbacks mémoire 
 
 - Les tickets, comptoirs, files et services sont mis en cache dans SQLite à chaque
   réponse du backend.
-- Les actions du guichetier (appel, absent, transfert, ouverture/fermeture) sont
-  **optimistes** : l'UI répond immédiatement, l'action part dans une outbox persistée.
-- L'outbox est rejouée au retour du réseau et au démarrage (3 tentatives max par action).
-- Le statut de connexion est affiché en permanence dans la barre du bas.
+- Les actions engagées par le guichetier (absent, transfert, terminer,
+  ouverture/fermeture, pause) sont mises en file dans une outbox persistée et
+  rejouées au retour du réseau (3 tentatives max par action).
+- Chaque action est rattachée à l'agent qui l'a créée : un autre agent qui se
+  connecte sur le même poste ne rejoue jamais les actions de son prédécesseur.
+- Les échecs définitifs sont visibles dans la barre de connexion, avec
+  « Réessayer » ou « Ignorer » action par action.
+- **Nouvel appel impossible hors ligne** : `call-next` exige le serveur. Le
+  guichetier peut terminer le ticket en cours ; un timeout d'appel ne crée jamais
+  de ticket fantôme (le ticket n'est adopté que s'il est confirmé côté serveur).
+- Au redémarrage, le ticket en cours est restauré depuis
+  `current_ticket_id` du guichet.
 
 ### Sécurité du token
 
 - Paire **access + refresh token** stockée via le **Gestionnaire d'identifiants
-  Windows** (crate `keyring`), avec fallback chiffré par le plugin store si le
-  coffre est indisponible.
+  Windows** (crate `keyring`). Si le coffre est indisponible, repli sur le
+  fichier de stockage local de l'application (`tonde-secure.json`, permissions
+  du profil utilisateur) — **non chiffré** : le coffre OS reste la voie normale.
 - Aucun jeton n'est **jamais** persisté dans le state Zustand ni dans `localStorage`.
 - Refresh automatique sur 401 (une seule tentative, hors routes `/auth/*`),
+  avec un renouvellement unique même si plusieurs requêtes échouent en parallèle ;
   rotation du refresh token à chaque renouvellement.
+- À la déconnexion, les actions en attente sont rejouées une dernière fois
+  lorsque le réseau est disponible, puis rattachées à aucun agent.
 
 ---
 

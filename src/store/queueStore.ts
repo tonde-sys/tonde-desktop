@@ -22,31 +22,43 @@ interface QueueState {
   reset: () => void;
 }
 
+// Un seul chargement à la fois : le poll de 7 s, la reprise après mutation
+// et le passage hors-ligne ne doivent pas empiler des requêtes concurrentes.
+let loadPromise: Promise<void> | null = null;
+
 export const useQueueStore = create<QueueState>()((set, get) => ({
   queues: [],
   services: [],
   isLoading: false,
   lastUpdated: null,
 
-  loadQueues: async (branchId) => {
-    set({ isLoading: true });
-    try {
-      const [queues, services] = await Promise.all([
-        apiService.getQueues(branchId),
-        apiService.getServices(branchId),
-      ]);
-      // Persist to SQLite for offline access
-      await Promise.all([
-        db.cacheQueues(queues, branchId),
-        db.cacheServices(services, branchId),
-      ]);
-      set({ queues, services, isLoading: false, lastUpdated: new Date().toISOString() });
-    } catch {
-      // Fallback to SQLite cache
-      const cachedQueues = await db.getCachedQueues(branchId);
-      const cachedServices = await db.getCachedServices(branchId);
-      set({ queues: cachedQueues, services: cachedServices, isLoading: false });
-    }
+  loadQueues: (branchId) => {
+    if (loadPromise) return loadPromise;
+
+    loadPromise = (async () => {
+      set({ isLoading: true });
+      try {
+        const [queues, services] = await Promise.all([
+          apiService.getQueues(branchId),
+          apiService.getServices(branchId),
+        ]);
+        // Persist to SQLite for offline access
+        await Promise.all([
+          db.cacheQueues(queues, branchId),
+          db.cacheServices(services, branchId),
+        ]);
+        set({ queues, services, isLoading: false, lastUpdated: new Date().toISOString() });
+      } catch {
+        // Fallback to SQLite cache
+        const cachedQueues = await db.getCachedQueues(branchId);
+        const cachedServices = await db.getCachedServices(branchId);
+        set({ queues: cachedQueues, services: cachedServices, isLoading: false });
+      } finally {
+        loadPromise = null;
+      }
+    })();
+
+    return loadPromise;
   },
 
   updateQueueFromWS: (serviceId, tickets, waitingCount) => {

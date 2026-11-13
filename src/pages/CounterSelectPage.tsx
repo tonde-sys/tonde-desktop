@@ -25,6 +25,7 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
   const { allCounters, isLoading, loadAllCounters, openCounter } = useCounterStore();
 
   const [contextReady, setContextReady] = useState(() => hasApiContext());
+  const [editingContext, setEditingContext] = useState(false);
   const [orgInput, setOrgInput] = useState(() => getApiContext()?.orgId ?? "");
   const [branchInput, setBranchInput] = useState(() => getApiContext()?.branchId ?? "");
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -43,6 +44,14 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
     onCounterSelected();
   };
 
+  const openContextForm = () => {
+    const context = getApiContext();
+    setOrgInput(context?.orgId ?? "");
+    setBranchInput(context?.branchId ?? "");
+    setSetupError(null);
+    setEditingContext(true);
+  };
+
   const handleSaveContext = (e: React.FormEvent) => {
     e.preventDefault();
     const orgId = orgInput.trim();
@@ -54,6 +63,7 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
     setSetupError(null);
     applyContext(orgId, newBranchId);
     setContextReady(true);
+    setEditingContext(false);
   };
 
   return (
@@ -68,18 +78,20 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
         <div className="flex items-center justify-center gap-2 mb-1">
           <Monitor size={20} className="text-violet" />
           <h1 className="text-text-primary font-semibold text-xl">
-            {contextReady ? t("counter.select") : t("counter.setup.title")}
+            {contextReady && !editingContext
+              ? t("counter.select")
+              : t("counter.setup.title")}
           </h1>
         </div>
         <p className="text-text-secondary text-sm mt-1">
-          {contextReady
+          {contextReady && !editingContext
             ? t("counter.hello", { name: user?.name ?? "" })
             : t("counter.setup.description")}
         </p>
       </div>
 
       <div className="w-full max-w-md">
-        {!contextReady ? (
+        {!contextReady || editingContext ? (
           <form onSubmit={handleSaveContext} className="card flex flex-col gap-4">
             <div className="flex items-center gap-2 text-text-secondary text-sm">
               <Settings2 size={16} className="text-violet" />
@@ -122,9 +134,20 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
               <p className="text-rose text-xs">{setupError}</p>
             )}
 
-            <button type="submit" className="btn-primary mt-1">
-              {t("counter.setup.save")}
-            </button>
+            <div className="flex gap-2 mt-1">
+              <button type="submit" className="btn-primary flex-1">
+                {t("counter.setup.save")}
+              </button>
+              {contextReady && (
+                <button
+                  type="button"
+                  onClick={() => setEditingContext(false)}
+                  className="btn-ghost border border-border-subtle"
+                >
+                  {t("common.cancel")}
+                </button>
+              )}
+            </div>
           </form>
         ) : isLoading ? (
           <div className="flex justify-center py-8">
@@ -161,6 +184,18 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
               </button>
             ))}
           </div>
+        )}
+
+        {contextReady && !editingContext && !isLoading && (
+          <button
+            type="button"
+            onClick={openContextForm}
+            className="mt-4 flex w-full items-center justify-center gap-1.5 text-xs
+              text-text-muted hover:text-violet transition-colors"
+          >
+            <Settings2 size={13} />
+            {t("counter.setup.change")}
+          </button>
         )}
       </div>
     </div>
