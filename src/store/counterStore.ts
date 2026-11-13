@@ -7,7 +7,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { Counter } from "../types";
-import { apiService } from "../services/api/apiService";
+import { apiService, ApiError } from "../services/api/apiService";
 import { useOfflineStore } from "./offlineStore";
 import { useAppStore } from "./app.store";
 import { db } from "../services/database/db";
@@ -48,8 +48,15 @@ export const useCounterStore = create<CounterState>()(
         set({ isLoading: true });
         try {
           const counter = await apiService.getCounter(counterId);
-          await db.upsertCounter(counter);
-          set({ myCounter: counter, isLoading: false });
+          // La pause ferme le guichet côté serveur : on conserve l'état
+          // "en pause" local pour proposer une reprise rapide au redémarrage.
+          const previous = get().myCounter;
+          const merged: Counter =
+            previous?.status === "PAUSED" && counter.status === "CLOSED"
+              ? { ...counter, status: "PAUSED" }
+              : counter;
+          await db.upsertCounter(merged);
+          set({ myCounter: merged, isLoading: false });
         } catch {
           const cached = await db.getCounter(counterId);
           set({ myCounter: cached, isLoading: false });
@@ -155,19 +162,28 @@ export const useCounterStore = create<CounterState>()(
           await apiService.openCounter(counterId, agentId);
         } catch (err) {
           if (useOfflineStore.getState().isOnline) {
-            notifyError(
-              "Ouverture du guichet impossible",
-              err instanceof Error ? err.message : undefined
-            );
-            return;
+            if (err instanceof ApiError && err.code === "COUNTER_ALREADY_OPEN") {
+              useAppStore.getState().addNotification({
+                type: "info",
+                title: "Guichet déjà ouvert",
+                message: "Session reprise sur ce guichet.",
+              });
+            } else {
+              notifyError(
+                "Ouverture du guichet impossible",
+                err instanceof Error ? err.message : undefined
+              );
+              return;
+            }
+          } else {
+            // Hors-ligne : ouverture locale, rejouée à la reconnexion.
+            await useOfflineStore
+              .getState()
+              .enqueue("OPEN_COUNTER", {
+                counter_id: counterId,
+                agent_id: agentId,
+              });
           }
-          // Hors-ligne : ouverture locale, rejouée à la reconnexion.
-          await useOfflineStore
-            .getState()
-            .enqueue("OPEN_COUNTER", {
-              counter_id: counterId,
-              agent_id: agentId,
-            });
         }
 
         const base: Counter = existing ?? {

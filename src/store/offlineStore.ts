@@ -15,18 +15,33 @@ interface OfflineState {
   syncQueue: SyncQueueItem[];
   isSyncing: boolean;
   lastSyncAt: string | null;
+  actor: { userId: string; branchId: string } | null;
 
   // Actions
   setOnline: (online: boolean) => Promise<void>;
   setConnectionStatus: (status: ConnectionStatus) => void;
+  setActor: (actor: { userId: string; branchId: string } | null) => void;
   enqueue: (action: SyncActionType, payload: Record<string, unknown>) => Promise<void>;
   syncPending: () => Promise<void>;
   loadSyncQueue: () => Promise<void>;
   clearCompleted: () => Promise<void>;
+  retryItem: (id: string) => Promise<void>;
+  dismissItem: (id: string) => Promise<void>;
 
   // Helpers
   getPendingCount: () => number;
+  getFailedCount: () => number;
   hasPending: () => boolean;
+}
+
+/** Une action appartient à l'agent qui l'a créée (les anciennes n'ont pas de tag). */
+export function belongsToActor(
+  item: SyncQueueItem,
+  actor: { userId: string } | null
+): boolean {
+  const itemUser = item.payload.user_id;
+  if (typeof itemUser !== "string") return true;
+  return actor !== null && itemUser === actor.userId;
 }
 
 export const useOfflineStore = create<OfflineState>()((set, get) => ({
@@ -35,6 +50,7 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
   syncQueue: [],
   isSyncing: false,
   lastSyncAt: null,
+  actor: null,
 
   setOnline: async (online) => {
     const wasOffline = !get().isOnline;
@@ -47,11 +63,21 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
 
   setConnectionStatus: (status) => set({ connectionStatus: status }),
 
+  setActor: (actor) => set({ actor }),
+
   enqueue: async (action, payload) => {
+    const actor = get().actor;
     const item: SyncQueueItem = {
       id: nanoid(),
       action,
-      payload,
+      // L'action est rattachée à l'agent courant : elle ne sera jamais
+      // rejouée par un autre agent sur le même poste.
+      payload: {
+        ...payload,
+        ...(actor
+          ? { user_id: actor.userId, branch_id: actor.branchId }
+          : {}),
+      },
       created_at: new Date().toISOString(),
       status: "PENDING",
       retry_count: 0,
@@ -69,12 +95,14 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
   },
 
   syncPending: async () => {
-    const { isSyncing, syncQueue } = get();
-    if (isSyncing) return;
+    const { isSyncing, syncQueue, actor } = get();
+    if (isSyncing || !actor) return;
 
-    // Seuls les PENDING sont rejoués : un FAILED a déjà épuisé ses
-    // tentatives et ne doit pas boucler indéfiniment.
-    const pending = syncQueue.filter((i) => i.status === "PENDING");
+    // Seuls les PENDING de l'agent courant sont rejoués : un FAILED a déjà
+    // épuisé ses tentatives et ne doit pas boucler indéfiniment.
+    const pending = syncQueue.filter(
+      (i) => i.status === "PENDING" && belongsToActor(i, actor)
+    );
     if (pending.length === 0) return;
 
     set({ isSyncing: true });
@@ -134,6 +162,7 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
     const items = await db.getSyncQueue();
     const recovered: SyncQueueItem[] = [];
     for (const item of items) {
+      if (item.status === "DONE") continue;
       if (item.status === "SYNCING") {
         // Crash en pleine synchronisation : l'action redevient PENDING.
         // Les commandes backend sont idempotentes par ticket.
@@ -143,6 +172,8 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
         recovered.push(item);
       }
     }
+    // Les actions déjà appliquées n'ont pas besoin d'être conservées.
+    await db.clearDoneSyncItems();
     set({ syncQueue: recovered });
   },
 
@@ -153,8 +184,56 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
     }));
   },
 
-  getPendingCount: () =>
-    get().syncQueue.filter((i) => i.status === "PENDING" || i.status === "SYNCING").length,
+  retryItem: async (id) => {
+    const { syncQueue, actor } = get();
+    const item = syncQueue.find((i) => i.id === id);
+    if (!item || item.status !== "FAILED" || !belongsToActor(item, actor)) return;
+
+    await db.updateSyncItemStatus(id, "PENDING", undefined, 0, undefined);
+    set((state) => ({
+      syncQueue: state.syncQueue.map((i) =>
+        i.id === id
+          ? { ...i, status: "PENDING", retry_count: 0, error: undefined }
+          : i
+      ),
+    }));
+    // Hors connexion, l'action repartira au retour du réseau.
+    if (get().isOnline) {
+      await get().syncPending();
+    }
+  },
+
+  dismissItem: async (id) => {
+    const { syncQueue, actor } = get();
+    const item = syncQueue.find((i) => i.id === id);
+    if (!item || !belongsToActor(item, actor)) return;
+
+    await db.updateSyncItemStatus(
+      id,
+      "DONE",
+      new Date().toISOString(),
+      item.retry_count
+    );
+    set((state) => ({
+      syncQueue: state.syncQueue.filter((i) => i.id !== id),
+    }));
+  },
+
+  getPendingCount: () => {
+    const { syncQueue, actor } = get();
+    return syncQueue.filter(
+      (i) =>
+        (i.status === "PENDING" || i.status === "SYNCING") &&
+        belongsToActor(i, actor)
+    ).length;
+  },
+
+  getFailedCount: () => {
+    const { syncQueue, actor } = get();
+    return syncQueue.filter(
+      (i) => i.status === "FAILED" && belongsToActor(i, actor)
+    ).length;
+  },
 
   hasPending: () => get().getPendingCount() > 0,
 }));

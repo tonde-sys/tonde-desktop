@@ -14,6 +14,7 @@ import { useCounterStore } from "../store/counterStore";
 import { useTicketStore } from "../store/ticketStore";
 import { useQueueStore } from "../store/queueStore";
 import { useAuthStore } from "../store/authStore";
+import { useOfflineStore } from "../store/offlineStore";
 import { useAgentShortcuts } from "../hooks/useKeyboardShortcuts";
 import { wsManager } from "../lib/WebSocketManager";
 import { IS_MOCK_MODE } from "../config/api";
@@ -27,17 +28,18 @@ import {
   RotateCcw,
   Loader2,
   Inbox,
+  Play,
 } from "lucide-react";
 
 export function AgentDashboard() {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
   const myCounter = useCounterStore((s) => s.myCounter);
-  const loadMyCounter = useCounterStore((s) => s.loadMyCounter);
   const pauseCounter = useCounterStore((s) => s.pauseCounter);
   const resumeCounter = useCounterStore((s) => s.resumeCounter);
   const { currentTicket, isLoading, callNext, markAbsent, recall, complete } =
     useTicketStore();
+  const isOnline = useOfflineStore((s) => s.isOnline);
   const { queues, loadQueues } = useQueueStore();
   const { openTransferModal, openShortcutsHelp, closeAllDialogs } = useAppStore();
 
@@ -46,13 +48,23 @@ export function AgentDashboard() {
     preloadSounds();
   }, []);
 
-  // Rafraîchit l'état réel du guichet au démarrage (cache persisté)
+  // Rafraîchit l'état réel du guichet au démarrage, puis reprend le
+  // ticket éventuellement en cours (redémarrage, changement de poste).
   useEffect(() => {
-    if (myCounter?.id) {
-      void loadMyCounter(myCounter.id);
-    }
-    // Au montage uniquement : myCounter est ensuite piloté par le store
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    const counterId = useCounterStore.getState().myCounter?.id;
+    if (!counterId) return;
+    void useCounterStore
+      .getState()
+      .loadMyCounter(counterId)
+      .then(() => {
+        const counter = useCounterStore.getState().myCounter;
+        if (counter?.current_ticket_id) {
+          void useTicketStore
+            .getState()
+            .restoreCurrentTicket(counter.current_ticket_id);
+        }
+      });
+    // Au montage uniquement : myCounter est ensuite piloté par le store.
   }, []);
 
   // Chargement initial de la file
@@ -123,6 +135,27 @@ export function AgentDashboard() {
       <div className="h-full grid grid-cols-[1fr_320px] gap-0">
         {/* ── Zone principale : ticket en cours ── */}
         <div className="flex flex-col items-center justify-center gap-8 px-8 border-r border-border-subtle">
+          {myCounter?.status === "PAUSED" && (
+            <div className="w-full max-w-xl rounded-card border border-amber/40 bg-amber/10 px-4 py-3 flex items-center justify-between">
+              <div>
+                <p className="text-amber font-medium text-sm">
+                  {t("counter.status.paused")}
+                </p>
+                <p className="text-text-secondary text-xs mt-0.5">
+                  {t("counter.pausedHint")}
+                </p>
+              </div>
+              <button
+                onClick={handlePauseToggle}
+                className="btn-primary flex items-center gap-2"
+              >
+                <Play size={16} />
+                {t("counter.resume")}
+                <span className="kbd kbd-inverse">P</span>
+              </button>
+            </div>
+          )}
+
           {currentTicket ? (
             <>
               {/* Numéro ticket géant */}
@@ -198,7 +231,7 @@ export function AgentDashboard() {
                   isLoading ||
                   !myCounter ||
                   myCounter.status !== "OPEN" ||
-                  totalWaiting === 0
+                  !isOnline
                 }
                 className="btn-primary text-xl px-12 py-5 flex items-center gap-3
                   shadow-[0_0_30px_rgba(108,71,255,0.3)] hover:shadow-[0_0_40px_rgba(108,71,255,0.5)]"
@@ -211,6 +244,9 @@ export function AgentDashboard() {
                 {t("ticket.callNext")}
                 <span className="kbd kbd-inverse">Espace</span>
               </button>
+              {!isOnline && (
+                <p className="text-amber text-xs">{t("ticket.callOffline")}</p>
+              )}
             </>
           )}
         </div>

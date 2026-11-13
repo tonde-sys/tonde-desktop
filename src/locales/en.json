@@ -26,6 +26,7 @@
     "close": "Close counter",
     "pause": "Pause",
     "resume": "Resume",
+    "pausedHint": "No more customers are called at this counter.",
     "status": {
       "open": "Open",
       "paused": "Paused",
@@ -38,6 +39,7 @@
       "orgId": "Organization ID",
       "branchId": "Branch ID",
       "save": "Save",
+      "change": "Change branch",
       "invalid": "Both identifiers are required"
     }
   },
@@ -49,6 +51,7 @@
     "complete": "Done",
     "priority": "Priority",
     "noTicket": "No tickets waiting",
+    "callOffline": "Calling is unavailable offline — finish the current ticket",
     "currentTicket": "Current ticket",
     "nextTicket": "Next ticket",
     "transferTitle": "Transfer ticket",
@@ -77,6 +80,25 @@
     "connected": "Connected",
     "reconnecting": "Reconnecting...",
     "offline": "Offline — last known state"
+  },
+  "outbox": {
+    "title": "Offline actions",
+    "pending": "{{count}} pending",
+    "failed": "{{count}} failed",
+    "attempts": "{{count}} attempt(s)",
+    "retry": "Retry",
+    "dismiss": "Dismiss",
+    "actions": {
+      "CALL_TICKET": "Ticket call",
+      "RECALL_TICKET": "Ticket recall",
+      "MARK_ABSENT": "Customer absent",
+      "COMPLETE_TICKET": "Ticket completed",
+      "TRANSFER_TICKET": "Ticket transfer",
+      "PAUSE_COUNTER": "Counter pause",
+      "RESUME_COUNTER": "Counter resume",
+      "OPEN_COUNTER": "Counter open",
+      "CLOSE_COUNTER": "Counter close"
+    }
   },
   "shortcuts": {
     "title": "Keyboard shortcuts",

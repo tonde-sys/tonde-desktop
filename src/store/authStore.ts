@@ -20,6 +20,7 @@ import { wsManager } from "../lib/WebSocketManager";
 import { useCounterStore } from "./counterStore";
 import { useTicketStore } from "./ticketStore";
 import { useQueueStore } from "./queueStore";
+import { useOfflineStore } from "./offlineStore";
 
 interface LogoutOptions {
   /** false = pas d'appel réseau (session déjà invalide) */
@@ -128,6 +129,13 @@ export const useAuthStore = create<AuthState>()(
                 // requêtes repasseront par le refresh au retour réseau.
               }
             }
+
+            const restoredBranch =
+              persistedUser.branch_id || context?.branchId || "";
+            useOfflineStore.getState().setActor({
+              userId: persistedUser.id,
+              branchId: restoredBranch,
+            });
           } else {
             if (bundle?.accessToken) {
               await tokenStorage.clear().catch(() => undefined);
@@ -171,6 +179,13 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             error: null,
           });
+
+          // Les actions hors ligne sont rattachées à cet agent : elles ne
+          // seront jamais rejouées par un autre agent sur le même poste.
+          useOfflineStore.getState().setActor({
+            userId: user.id,
+            branchId: user.branch_id || getApiContext()?.branchId || "",
+          });
         } catch (err) {
           set({
             user: null,
@@ -183,6 +198,13 @@ export const useAuthStore = create<AuthState>()(
 
       logout: async (options) => {
         if (options?.remote !== false) {
+          const offline = useOfflineStore.getState();
+          // Dernière chance d'écouler les actions en attente avant que le
+          // jeton ne soit révoqué. Un échec ne bloque jamais la déconnexion.
+          if (offline.isOnline && offline.hasPending()) {
+            await offline.syncPending().catch(() => undefined);
+          }
+
           const bundle = await tokenStorage.getBundle().catch(() => null);
           try {
             await apiService.logout(bundle?.refreshToken);
@@ -197,6 +219,7 @@ export const useAuthStore = create<AuthState>()(
         useCounterStore.getState().reset();
         useTicketStore.getState().reset();
         useQueueStore.getState().reset();
+        useOfflineStore.getState().setActor(null);
 
         set({
           user: null,
@@ -238,6 +261,11 @@ export const useAuthStore = create<AuthState>()(
 
       applyContext: (orgId, branchId) => {
         setApiContext({ orgId, branchId });
+        // Changement de poste : rien de l'ancienne agence ne doit survivre
+        // (guichet ouvert, file, ticket en cours).
+        useCounterStore.getState().reset();
+        useTicketStore.getState().reset();
+        useQueueStore.getState().reset();
         const { user } = get();
         if (user) {
           set({ user: { ...user, branch_id: branchId } });

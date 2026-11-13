@@ -26,6 +26,7 @@
     "close": "Fermer le guichet",
     "pause": "Mettre en pause",
     "resume": "Reprendre",
+    "pausedHint": "Les clients ne sont plus appelés sur ce guichet.",
     "status": {
       "open": "Ouvert",
       "paused": "En pause",
@@ -38,6 +39,7 @@
       "orgId": "Identifiant de l'organisation",
       "branchId": "Identifiant de l'agence",
       "save": "Enregistrer",
+      "change": "Changer d'agence",
       "invalid": "Les deux identifiants sont requis"
     }
   },
@@ -49,6 +51,7 @@
     "complete": "Terminer",
     "priority": "Priorité",
     "noTicket": "Aucun ticket en attente",
+    "callOffline": "Appel indisponible hors ligne — terminez le ticket en cours",
     "currentTicket": "Ticket en cours",
     "nextTicket": "Prochain ticket",
     "transferTitle": "Transférer le ticket",
@@ -77,6 +80,25 @@
     "connected": "Connecté",
     "reconnecting": "Reconnexion...",
     "offline": "Hors ligne — dernier état affiché"
+  },
+  "outbox": {
+    "title": "Actions hors ligne",
+    "pending": "{{count}} en attente",
+    "failed": "{{count}} en échec",
+    "attempts": "{{count}} tentative(s)",
+    "retry": "Réessayer",
+    "dismiss": "Ignorer",
+    "actions": {
+      "CALL_TICKET": "Appel de ticket",
+      "RECALL_TICKET": "Rappel de ticket",
+      "MARK_ABSENT": "Client absent",
+      "COMPLETE_TICKET": "Ticket terminé",
+      "TRANSFER_TICKET": "Transfert de ticket",
+      "PAUSE_COUNTER": "Mise en pause",
+      "RESUME_COUNTER": "Reprise du guichet",
+      "OPEN_COUNTER": "Ouverture du guichet",
+      "CLOSE_COUNTER": "Fermeture du guichet"
+    }
   },
   "shortcuts": {
     "title": "Raccourcis clavier",

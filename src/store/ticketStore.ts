@@ -31,6 +31,7 @@ interface TicketState {
 
   // State helpers
   setCurrentTicket: (ticket: Ticket | null) => void;
+  restoreCurrentTicket: (ticketId: string) => Promise<void>;
   updateTicketStatus: (ticketId: string, status: TicketStatus) => void;
   clearError: () => void;
   reset: () => void;
@@ -446,6 +447,22 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       currentTicket: ticket,
       processingStartedAt: ticket ? nowIso() : null,
     }),
+
+  restoreCurrentTicket: async (ticketId) => {
+    if (get().currentTicket || get().isLoading) return;
+    try {
+      const ticket = await apiService.getTicket(ticketId);
+      // Seul un ticket réellement en cours peut être repris.
+      if (ticket.status !== "CALLED" && ticket.status !== "PROCESSING") return;
+      await db.upsertTicket(ticket);
+      set({
+        currentTicket: ticket,
+        processingStartedAt: ticket.called_at ?? nowIso(),
+      });
+    } catch {
+      // Reprise best-effort : une file vide prendra le relais.
+    }
+  },
 
   updateTicketStatus: (ticketId, status) =>
     set((state) => ({
