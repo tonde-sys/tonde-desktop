@@ -42,7 +42,7 @@ Toutes les tâches du sprint sont dans Notion.
 **Vital fait ça une seule fois par projet :**
 
 ```
-1. Crée le repo sur GitHub (sous l'organisation TONDE-APP)
+1. Crée le repo sur GitHub (sous l'organisation tonde-sys)
 2. Configure le ruleset protect-main
 3. Invite le développeur (Settings → Collaborators → Add people → rôle Write)
 4. Envoie le lien du repo sur WhatsApp
@@ -58,7 +58,7 @@ Quand Vital t'envoie le lien du repo sur WhatsApp :
 
 ```bash
 # 1. Télécharger le projet sur ton ordinateur
-git clone https://github.com/TONDE-APP/NOM-DU-REPO.git
+git clone https://github.com/tonde-sys/NOM-DU-REPO.git
 cd NOM-DU-REPO
 
 # 2. Configurer l'environnement
