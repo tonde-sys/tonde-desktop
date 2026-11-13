@@ -25,7 +25,7 @@ Linux/macOS : voir les [prérequis Tauri](https://v2.tauri.app/start/prerequisit
 ## Démarrage rapide
 
 ```bash
-git clone https://github.com/TONDE-APP/tonde-desktop.git
+git clone https://github.com/tonde-sys/tonde-desktop.git
 cd tonde-desktop
 npm install
 

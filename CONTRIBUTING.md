@@ -8,7 +8,7 @@
 ## 1. Installer le projet (une seule fois)
 
 ```bash
-git clone https://github.com/TONDE-APP/tonde-desktop.git
+git clone https://github.com/tonde-sys/tonde-desktop.git
 cd tonde-desktop
 npm install
 cp .env.example .env.local
