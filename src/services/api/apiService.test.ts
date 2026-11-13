@@ -159,6 +159,25 @@ describe("httpClient", () => {
     });
   });
 
+  it("ne renouvelle le token qu'une fois pour deux 401 simultanés", async () => {
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({ detail: "Token expiré" }, 401))
+      .mockResolvedValueOnce(mockResponse({ detail: "Token expiré" }, 401))
+      .mockResolvedValue(mockResponse({ success: true, data: { id: "ok" } }));
+    const refreshHandler = vi.fn().mockResolvedValue("new-token");
+    httpClient.setRefreshHandler(refreshHandler);
+    httpClient.setToken("old-token");
+
+    const [first, second] = await Promise.all([
+      httpClient.get<{ id: string }>("/tickets/ticket-1"),
+      httpClient.get<{ id: string }>("/branches/b1/queues"),
+    ]);
+
+    expect(first).toEqual({ id: "ok" });
+    expect(second).toEqual({ id: "ok" });
+    expect(refreshHandler).toHaveBeenCalledTimes(1);
+  });
+
   it("ne tente jamais de refresh sur les routes /auth/*", async () => {
     fetchMock.mockResolvedValue(mockResponse({ detail: "Identifiants invalides" }, 401));
     const refreshHandler = vi.fn();

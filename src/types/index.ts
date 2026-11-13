@@ -45,6 +45,7 @@ export interface Counter {
   branch_id: string;
   is_active?: boolean;
   current_ticket?: Ticket;
+  current_ticket_id?: string | null;
 }
 
 // ------ EMPLOYEE ------

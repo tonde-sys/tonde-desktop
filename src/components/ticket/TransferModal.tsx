@@ -44,8 +44,8 @@ function TransferDialog({ ticket }: { ticket: Ticket }) {
   const confirmSelection = useCallback(
     async (serviceId: string) => {
       if (isLoading) return;
-      await transfer(ticket.id, "", serviceId);
-      close();
+      const success = await transfer(ticket.id, "", serviceId);
+      if (success) close();
     },
     [ticket.id, isLoading, transfer, close]
   );

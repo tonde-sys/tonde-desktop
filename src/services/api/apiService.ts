@@ -114,6 +114,13 @@ const mockApi = {
     return ticket;
   },
 
+  async getTicket(ticketId: string): Promise<Ticket> {
+    await delay(100);
+    const ticket = mockTickets.find(t => t.id === ticketId);
+    if (!ticket) throw new Error("Ticket non trouvé");
+    return ticket;
+  },
+
   async recallTicket(_ticketId: string, _counterId: string): Promise<void> {
     await delay(200);
   },
@@ -330,6 +337,7 @@ class ApiClient {
   private token: string | null = null;
   private refreshHandler: RefreshHandler | null = null;
   private unauthorizedHandler: UnauthorizedHandler | null = null;
+  private refreshPromise: Promise<string | null> | null = null;
 
   setToken(token: string): void {
     this.token = token;
@@ -345,6 +353,21 @@ class ApiClient {
 
   setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
     this.unauthorizedHandler = handler;
+  }
+
+  // Un seul refresh à la fois : le backend révoque l'ancien refresh token
+  // à chaque rotation, deux rotations concurrentes déconnectent l'agent.
+  private refreshOnce(): Promise<string | null> {
+    if (!this.refreshPromise) {
+      this.refreshPromise = (async () => {
+        try {
+          return (await this.refreshHandler?.()) ?? null;
+        } finally {
+          this.refreshPromise = null;
+        }
+      })();
+    }
+    return this.refreshPromise;
   }
 
   private async send(
@@ -389,6 +412,7 @@ class ApiClient {
     body?: unknown,
     allowRefresh = true
   ): Promise<T> {
+    const tokenAtRequest = this.token;
     const res = await this.send(method, path, body);
     const payload: unknown = await res.json().catch(() => null);
 
@@ -399,7 +423,11 @@ class ApiClient {
       !isAuthPath &&
       this.refreshHandler
     ) {
-      const newToken = await this.refreshHandler();
+      // Une requête parallèle a déjà renouvelé le token pendant ce vol.
+      if (this.token && this.token !== tokenAtRequest) {
+        return this.request<T>(method, path, body, false);
+      }
+      const newToken = await this.refreshOnce();
       if (newToken) {
         this.token = newToken;
         return this.request<T>(method, path, body, false);
@@ -560,6 +588,17 @@ interface BackendCounter {
   current_ticket_id: string | null;
 }
 
+interface BackendTicket {
+  id: string;
+  number: string;
+  status: string;
+  priority: string;
+  agency_id: string;
+  service_id: string;
+  created_at: string;
+  counter_name: string | null;
+}
+
 interface BackendService {
   id: string;
   name: string;
@@ -634,6 +673,7 @@ function mapCounter(dto: BackendCounter): Counter {
     service_ids: [],
     branch_id: dto.agency_id,
     is_active: dto.is_active,
+    current_ticket_id: dto.current_ticket_id ?? null,
   };
 }
 
@@ -645,6 +685,40 @@ function mapService(dto: BackendService): Service {
     branch_id: dto.branch_id,
     is_active: dto.is_active,
     avg_processing_minutes: dto.avg_duration_minutes,
+  };
+}
+
+const TICKET_STATUS_MAP: Record<string, Ticket["status"]> = {
+  waiting: "WAITING",
+  called: "CALLED",
+  serving: "PROCESSING",
+  processing: "PROCESSING",
+  done: "COMPLETED",
+  completed: "COMPLETED",
+  absent: "ABSENT",
+  transferred: "CANCELLED",
+  cancelled: "CANCELLED",
+};
+
+function mapTicketPriority(priority: string): Ticket["priority"] {
+  if (priority === "vip" || priority === "emergency") return 2;
+  if (priority === "priority") return 1;
+  return 0;
+}
+
+function mapTicket(dto: BackendTicket): Ticket {
+  return {
+    id: dto.id,
+    number: dto.number,
+    status: TICKET_STATUS_MAP[dto.status] ?? "WAITING",
+    priority: mapTicketPriority(dto.priority),
+    created_at: dto.created_at,
+    called_at:
+      dto.status === "called" || dto.status === "serving"
+        ? new Date().toISOString()
+        : undefined,
+    service_id: dto.service_id,
+    branch_id: dto.agency_id,
   };
 }
 
@@ -719,6 +793,23 @@ async function fetchBranchDisplay(branchId: string): Promise<BackendDisplay> {
   return httpClient.get<BackendDisplay>(`/branches/${branchId}/display`);
 }
 
+/** Sonde de récupération réseau : légère, sans authentification. */
+export async function checkBackendHealth(): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5_000);
+  try {
+    const res = await appFetch(`${API_BASE_URL}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    return res.ok;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function closeCounterRemote(counterId: string): Promise<void> {
   const context = requireApiContext();
   try {
@@ -731,14 +822,23 @@ async function closeCounterRemote(counterId: string): Promise<void> {
   }
 }
 
-async function openCounterRemote(counterId: string): Promise<void> {
+async function openCounterRemote(
+  counterId: string,
+  allowAlreadyOpen = false
+): Promise<void> {
   const context = requireApiContext();
   try {
     await httpClient.post(
       `/organizations/${context.orgId}/branches/${context.branchId}/counters/${counterId}/open`
     );
   } catch (err) {
-    if (err instanceof ApiError && err.code === "COUNTER_ALREADY_OPEN") return;
+    if (
+      allowAlreadyOpen &&
+      err instanceof ApiError &&
+      err.code === "COUNTER_ALREADY_OPEN"
+    ) {
+      return;
+    }
     throw err;
   }
 }
@@ -768,15 +868,6 @@ export const apiService = {
     await resolveContextAfterLogin(role);
 
     const context = getApiContext();
-    let branchName = "";
-    if (context) {
-      try {
-        const display = await fetchBranchDisplay(context.branchId);
-        branchName = display.branch.name;
-      } catch {
-        // Nom d'agence cosmétique : jamais bloquant pour la connexion.
-      }
-    }
 
     return {
       id: auth.user.id,
@@ -784,7 +875,7 @@ export const apiService = {
       email: auth.user.email ?? "",
       role,
       branch_id: context?.branchId ?? "",
-      branch_name: branchName,
+      branch_name: "",
       token: auth.access_token,
       refresh_token: auth.refresh_token,
       token_expires_at: decodeJwtExpiry(auth.access_token),
@@ -881,6 +972,12 @@ export const apiService = {
     );
   },
 
+  async getTicket(ticketId: string): Promise<Ticket> {
+    if (apiImpl) return apiImpl.getTicket(ticketId);
+    const dto = await httpClient.get<BackendTicket>(`/tickets/${ticketId}`);
+    return mapTicket(dto);
+  },
+
   async recallTicket(_ticketId: string, _counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.recallTicket(_ticketId, _counterId);
     // Aucun endpoint /recall côté backend : l'action est masquée en mode réel.
@@ -898,8 +995,8 @@ export const apiService = {
 
   async completeTicket(ticketId: string, _counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.completeTicket(ticketId, _counterId);
-    // CALLED → SERVING → DONE. Si le ticket est déjà en service (rejeu
-    // après coupure réseau), on enchaîne directement sur /done.
+    // CALLED → SERVING → DONE. Les transitions déjà franchies (rejeu
+    // après coupure réseau) sont considérées comme appliquées.
     try {
       await httpClient.post(`/tickets/${ticketId}/serving`);
     } catch (err) {
@@ -907,7 +1004,13 @@ export const apiService = {
         throw err;
       }
     }
-    await httpClient.post(`/tickets/${ticketId}/done`);
+    try {
+      await httpClient.post(`/tickets/${ticketId}/done`);
+    } catch (err) {
+      if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
+        throw err;
+      }
+    }
   },
 
   async transferTicket(
@@ -949,7 +1052,9 @@ export const apiService = {
 
   async resumeCounter(counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.resumeCounter(counterId);
-    await openCounterRemote(counterId);
+    // Reprise de service : si le guichet est déjà ouvert côté serveur,
+    // c'est l'état souhaité (passation), pas une erreur.
+    await openCounterRemote(counterId, true);
   },
 
   async closeCounter(counterId: string): Promise<void> {

@@ -27,7 +27,7 @@ interface TicketState {
   recall: (counterId: string) => Promise<void>;
   markAbsent: (ticketId: string, counterId: string) => Promise<void>;
   complete: (ticketId: string, counterId: string) => Promise<void>;
-  transfer: (ticketId: string, toCounterId: string, toServiceId: string) => Promise<void>;
+  transfer: (ticketId: string, toCounterId: string, toServiceId: string) => Promise<boolean>;
 
   // State helpers
   setCurrentTicket: (ticket: Ticket | null) => void;
@@ -49,7 +49,34 @@ function errorMessage(err: unknown): string {
 
 /** Erreur réseau/timeout : le backend n'a pas pu être joint. */
 function isNetworkFailure(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 0;
+  return err instanceof ApiError && err.status === 0 && err.code === "NETWORK";
+}
+
+/** Délai dépassé : le serveur a peut-être appliqué l'action. */
+function isTimeoutFailure(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 0 && err.code === "TIMEOUT";
+}
+
+/**
+ * Après un timeout sur call-next, le serveur a pu attribuer un ticket.
+ * On adopte l'état réel du guichet au lieu d'inventer un ticket local.
+ */
+async function reconcileCounterTicket(counterId: string): Promise<Ticket | null> {
+  try {
+    const counter = await apiService.getCounter(counterId);
+    if (!counter.current_ticket_id) return null;
+    const ticket = await apiService.getTicket(counter.current_ticket_id);
+    if (
+      ticket.status === "COMPLETED" ||
+      ticket.status === "ABSENT" ||
+      ticket.status === "CANCELLED"
+    ) {
+      return null;
+    }
+    return ticket;
+  } catch {
+    return null;
+  }
 }
 
 function refreshQueues(): void {
@@ -73,87 +100,85 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
   callNext: async (counterId, serviceIds) => {
     if (get().isLoading) return;
 
+    if (!useOfflineStore.getState().isOnline) {
+      notify(
+        "warning",
+        "Appel indisponible hors ligne",
+        "Terminez le ticket en cours ; l'appel reprendra au retour du réseau."
+      );
+      return;
+    }
+
     const previousTicket = get().currentTicket;
     const previousStartedAt = get().processingStartedAt;
 
-    // Optimiste : le prochain ticket connu localement s'affiche
-    // immédiatement, la réponse serveur fait foi ensuite.
-    const optimistic = useQueueStore.getState().getNextTicket(serviceIds);
-
     set({ isLoading: true, error: null });
-    if (optimistic) {
-      set({
-        currentTicket: {
-          ...optimistic,
-          status: "CALLED",
-          called_at: nowIso(),
-        },
-        processingStartedAt: nowIso(),
-      });
-    }
 
-    const callFromCache = async (): Promise<boolean> => {
-      const ticket = await db.getNextWaitingTicket(serviceIds);
-      if (!ticket) return false;
-
-      const updated: Ticket = {
-        ...ticket,
-        status: "CALLED",
-        called_at: nowIso(),
-      };
-      await db.upsertTicket(updated);
-      await useOfflineStore.getState().enqueue("CALL_TICKET", {
-        ticket_id: ticket.id,
-        counter_id: counterId,
-      });
+    try {
+      const ticket = await apiService.callNextTicket(counterId, serviceIds);
+      await db.upsertTicket(ticket);
       set({
-        currentTicket: updated,
+        currentTicket: ticket,
         processingStartedAt: nowIso(),
         error: null,
       });
-      return true;
-    };
-
-    try {
-      if (useOfflineStore.getState().isOnline) {
-        try {
-          const ticket = await apiService.callNextTicket(
-            counterId,
-            serviceIds
-          );
-          await db.upsertTicket(ticket);
+      void playCallSound();
+      refreshQueues();
+    } catch (err) {
+      if (isTimeoutFailure(err)) {
+        // Réponse perdue : on demande au serveur quel ticket est réellement
+        // en cours avant d'afficher quoi que ce soit.
+        const adopted = await reconcileCounterTicket(counterId);
+        if (adopted) {
+          await db.upsertTicket(adopted);
           set({
-            currentTicket: ticket,
+            currentTicket: adopted,
             processingStartedAt: nowIso(),
             error: null,
           });
           void playCallSound();
           refreshQueues();
+          notify(
+            "warning",
+            "Réponse lente",
+            "Le ticket affiché a été confirmé par le serveur."
+          );
           return;
-        } catch (err) {
-          if (!isNetworkFailure(err)) throw err;
-          useOfflineStore.getState().setOnline(false);
         }
-      }
-
-      const called = await callFromCache();
-      if (!called) {
         set({
           currentTicket: previousTicket,
           processingStartedAt: previousStartedAt,
-          error: "Aucun ticket en attente",
+          error: "Aucun ticket confirmé par le serveur.",
         });
-        notify("warning", "Aucun ticket en attente");
+        refreshQueues();
+        notify(
+          "warning",
+          "Réponse incertaine",
+          "Aucun ticket n'a été confirmé par le serveur. Vérifiez la file avant de réessayer."
+        );
         return;
       }
-      void playCallSound();
-    } catch (err) {
+
+      if (isNetworkFailure(err)) {
+        useOfflineStore.getState().setOnline(false);
+        set({
+          currentTicket: previousTicket,
+          processingStartedAt: previousStartedAt,
+          error: "Serveur injoignable.",
+        });
+        notify(
+          "error",
+          "Appel impossible",
+          "Serveur injoignable. L'appel d'un nouveau ticket reprendra au retour du réseau."
+        );
+        return;
+      }
+
       set({
         currentTicket: previousTicket,
         processingStartedAt: previousStartedAt,
         error: errorMessage(err),
       });
-      if (optimistic) refreshQueues();
       notify("error", "Appel impossible", errorMessage(err));
     } finally {
       set({ isLoading: false });
@@ -174,8 +199,11 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         try {
           await apiService.recallTicket(currentTicket.id, counterId);
         } catch (err) {
-          if (!isNetworkFailure(err)) throw err;
-          useOfflineStore.getState().setOnline(false);
+          if (isNetworkFailure(err)) {
+            useOfflineStore.getState().setOnline(false);
+          } else if (!isTimeoutFailure(err)) {
+            throw err;
+          }
           await useOfflineStore.getState().enqueue("RECALL_TICKET", {
             ticket_id: currentTicket.id,
             counter_id: counterId,
@@ -240,16 +268,19 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
           notify("info", `Ticket ${ticket.number} marqué absent`);
           return;
         } catch (err) {
-          if (!isNetworkFailure(err)) throw err;
-          useOfflineStore.getState().setOnline(false);
+          if (isNetworkFailure(err)) {
+            useOfflineStore.getState().setOnline(false);
+          } else if (!isTimeoutFailure(err)) {
+            throw err;
+          }
         }
       }
 
       await closeInCache();
       notify(
         "warning",
-        "Absence enregistrée hors-ligne",
-        "Sera synchronisée au retour du réseau."
+        "Absence enregistrée",
+        "Synchronisation automatique en attente."
       );
     } catch (err) {
       set({
@@ -309,8 +340,11 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
           await db.upsertTicket(closed);
           refreshQueues();
         } catch (err) {
-          if (!isNetworkFailure(err)) throw err;
-          useOfflineStore.getState().setOnline(false);
+          if (isNetworkFailure(err)) {
+            useOfflineStore.getState().setOnline(false);
+          } else if (!isTimeoutFailure(err)) {
+            throw err;
+          }
         }
       }
 
@@ -318,8 +352,8 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         closed = await closeInCache();
         notify(
           "warning",
-          "Clôture enregistrée hors-ligne",
-          "Sera synchronisée au retour du réseau."
+          "Clôture enregistrée",
+          "Synchronisation automatique en attente."
         );
       } else {
         notify("success", `Ticket ${ticket.number} clôturé`);
@@ -343,7 +377,7 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
     const ticket = get().currentTicket;
     if (!ticket || ticket.id !== ticketId || get().isLoading) {
       if (!ticket) notify("warning", "Aucun ticket en cours");
-      return;
+      return false;
     }
 
     const previousStartedAt = get().processingStartedAt;
@@ -374,10 +408,13 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
             `Ticket ${ticket.number} transféré`,
             `Redirigé vers ${targetName}.`
           );
-          return;
+          return true;
         } catch (err) {
-          if (!isNetworkFailure(err)) throw err;
-          useOfflineStore.getState().setOnline(false);
+          if (isNetworkFailure(err)) {
+            useOfflineStore.getState().setOnline(false);
+          } else if (!isTimeoutFailure(err)) {
+            throw err;
+          }
         }
       }
 
@@ -388,15 +425,17 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       });
       notify(
         "warning",
-        "Transfert enregistré hors-ligne",
-        "Sera synchronisé au retour du réseau."
+        "Transfert enregistré",
+        "Synchronisation automatique en attente."
       );
+      return true;
     } catch (err) {
       set({
         currentTicket: ticket,
         processingStartedAt: previousStartedAt,
       });
       notify("error", "Transfert impossible", errorMessage(err));
+      return false;
     } finally {
       set({ isLoading: false });
     }

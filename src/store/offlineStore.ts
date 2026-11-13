@@ -58,6 +58,14 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
     };
     await db.insertSyncItem(item);
     set((state) => ({ syncQueue: [...state.syncQueue, item] }));
+
+    // Un timeout peut laisser l'action en attente alors que le réseau est
+    // bon : on retente automatiquement sans attendre un cycle offline→online.
+    if (get().isOnline) {
+      setTimeout(() => {
+        if (get().isOnline) void get().syncPending();
+      }, 5_000);
+    }
   },
 
   syncPending: async () => {

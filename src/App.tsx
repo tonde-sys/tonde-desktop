@@ -10,6 +10,7 @@ import "./lib/i18n"; // init i18next
 import { useAuthStore } from "./store/authStore";
 import { useCounterStore } from "./store/counterStore";
 import { useOfflineStore } from "./store/offlineStore";
+import { checkBackendHealth } from "./services/api/apiService";
 import { LoginPage } from "./pages/LoginPage";
 import { CounterSelectPage } from "./pages/CounterSelectPage";
 import { AgentDashboard } from "./pages/AgentDashboard";
@@ -38,6 +39,7 @@ function AppRouter() {
   const loadSyncQueue = useOfflineStore((s) => s.loadSyncQueue);
   const syncPending = useOfflineStore((s) => s.syncPending);
   const setOnline = useOfflineStore((s) => s.setOnline);
+  const isOnline = useOfflineStore((s) => s.isOnline);
 
   useEffect(() => {
     void initialize();
@@ -69,6 +71,26 @@ function AppRouter() {
       }
     });
   }, [isInitialized, isAuthenticated, loadSyncQueue, syncPending]);
+
+  // Récupération automatique : un timeout ou un serveur lent ne doit pas
+  // laisser le poste hors-ligne jusqu'au prochain événement système.
+  useEffect(() => {
+    if (!isAuthenticated || isOnline) return;
+    let cancelled = false;
+
+    const probe = async () => {
+      if (await checkBackendHealth()) {
+        if (!cancelled) void setOnline(true);
+      }
+    };
+
+    void probe();
+    const interval = setInterval(() => void probe(), 10_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [isAuthenticated, isOnline, setOnline]);
 
   if (!isInitialized) {
     return <BootScreen />;
