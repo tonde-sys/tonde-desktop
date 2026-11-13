@@ -1,11 +1,15 @@
 // ============================================================
 // TONDE DESKTOP — Counter Store (Zustand)
+// Le guichet ouvert est persisté pour reprendre le service
+// après un redémarrage de l'application.
 // ============================================================
 
 import { create } from "zustand";
-import type { Counter, CounterStatus } from "../types";
+import { persist } from "zustand/middleware";
+import type { Counter } from "../types";
 import { apiService } from "../services/api/apiService";
 import { useOfflineStore } from "./offlineStore";
+import { useAppStore } from "./app.store";
 import { db } from "../services/database/db";
 
 interface CounterState {
@@ -22,119 +26,191 @@ interface CounterState {
   openCounter: (counterId: string, agentId: string) => Promise<void>;
   updateCounterFromWS: (counter: Counter) => void;
   getCountersByService: (serviceId: string) => Counter[];
+  reset: () => void;
 }
 
-export const useCounterStore = create<CounterState>()((set, get) => ({
-  myCounter: null,
-  allCounters: [],
-  isLoading: false,
+function notifyError(title: string, message?: string): void {
+  useAppStore.getState().addNotification({
+    type: "error",
+    title,
+    message,
+  });
+}
 
-  loadMyCounter: async (counterId) => {
-    set({ isLoading: true });
-    try {
-      const counter = await apiService.getCounter(counterId);
-      await db.upsertCounter(counter);
-      set({ myCounter: counter, isLoading: false });
-    } catch {
-      const cached = await db.getCounter(counterId);
-      set({ myCounter: cached, isLoading: false });
+export const useCounterStore = create<CounterState>()(
+  persist(
+    (set, get) => ({
+      myCounter: null,
+      allCounters: [],
+      isLoading: false,
+
+      loadMyCounter: async (counterId) => {
+        set({ isLoading: true });
+        try {
+          const counter = await apiService.getCounter(counterId);
+          await db.upsertCounter(counter);
+          set({ myCounter: counter, isLoading: false });
+        } catch {
+          const cached = await db.getCounter(counterId);
+          set({ myCounter: cached, isLoading: false });
+        }
+      },
+
+      loadAllCounters: async (branchId) => {
+        set({ isLoading: true });
+        try {
+          const counters = await apiService.getCounters(branchId);
+          await db.cacheCounters(counters);
+          set({ allCounters: counters, isLoading: false });
+        } catch {
+          const cached = await db.getCachedCounters(branchId);
+          set({ allCounters: cached, isLoading: false });
+        }
+      },
+
+      pauseCounter: async (counterId) => {
+        const { isOnline, enqueue } = useOfflineStore.getState();
+        const current = get().myCounter;
+
+        set((state) => ({
+          myCounter: state.myCounter
+            ? { ...state.myCounter, status: "PAUSED" }
+            : null,
+          allCounters: state.allCounters.map((c) =>
+            c.id === counterId ? { ...c, status: "PAUSED" } : c
+          ),
+        }));
+        if (current) {
+          await db.upsertCounter({ ...current, status: "PAUSED" });
+        }
+
+        if (isOnline) {
+          try {
+            await apiService.pauseCounter(counterId);
+          } catch {
+            await enqueue("PAUSE_COUNTER", { counter_id: counterId });
+          }
+        } else {
+          await enqueue("PAUSE_COUNTER", { counter_id: counterId });
+        }
+      },
+
+      resumeCounter: async (counterId) => {
+        const { isOnline, enqueue } = useOfflineStore.getState();
+        const current = get().myCounter;
+
+        set((state) => ({
+          myCounter: state.myCounter
+            ? { ...state.myCounter, status: "OPEN" }
+            : null,
+          allCounters: state.allCounters.map((c) =>
+            c.id === counterId ? { ...c, status: "OPEN" } : c
+          ),
+        }));
+        if (current) {
+          await db.upsertCounter({ ...current, status: "OPEN" });
+        }
+
+        if (isOnline) {
+          try {
+            await apiService.resumeCounter(counterId);
+          } catch {
+            await enqueue("RESUME_COUNTER", { counter_id: counterId });
+          }
+        } else {
+          await enqueue("RESUME_COUNTER", { counter_id: counterId });
+        }
+      },
+
+      closeCounter: async (counterId) => {
+        try {
+          await apiService.closeCounter(counterId);
+        } catch {
+          // Le serveur est peut-être injoignable : la fermeture sera
+          // rejouée par l'outbox, le logout ne doit pas être bloqué.
+          await useOfflineStore
+            .getState()
+            .enqueue("CLOSE_COUNTER", { counter_id: counterId });
+        }
+
+        const current = get().myCounter;
+        if (current) {
+          await db.upsertCounter({ ...current, status: "CLOSED" });
+        }
+        set((state) => ({
+          myCounter:
+            state.myCounter?.id === counterId
+              ? { ...state.myCounter, status: "CLOSED" }
+              : state.myCounter,
+          allCounters: state.allCounters.map((c) =>
+            c.id === counterId ? { ...c, status: "CLOSED" } : c
+          ),
+        }));
+      },
+
+      openCounter: async (counterId, agentId) => {
+        const existing = get().allCounters.find((c) => c.id === counterId);
+
+        try {
+          await apiService.openCounter(counterId, agentId);
+        } catch (err) {
+          if (useOfflineStore.getState().isOnline) {
+            notifyError(
+              "Ouverture du guichet impossible",
+              err instanceof Error ? err.message : undefined
+            );
+            return;
+          }
+          // Hors-ligne : ouverture locale, rejouée à la reconnexion.
+          await useOfflineStore
+            .getState()
+            .enqueue("OPEN_COUNTER", {
+              counter_id: counterId,
+              agent_id: agentId,
+            });
+        }
+
+        const base: Counter = existing ?? {
+          id: counterId,
+          number: 0,
+          name: "Guichet",
+          status: "OPEN",
+          service_ids: [],
+          branch_id: "",
+        };
+        const opened: Counter = { ...base, status: "OPEN", agent_id: agentId };
+
+        await db.upsertCounter(opened);
+        set((state) => ({
+          myCounter: opened,
+          allCounters: state.allCounters.map((c) =>
+            c.id === counterId
+              ? { ...c, status: "OPEN", agent_id: agentId }
+              : c
+          ),
+        }));
+      },
+
+      updateCounterFromWS: (counter) =>
+        set((state) => ({
+          myCounter:
+            state.myCounter?.id === counter.id
+              ? { ...state.myCounter, ...counter }
+              : state.myCounter,
+          allCounters: state.allCounters.map((c) =>
+            c.id === counter.id ? { ...c, ...counter } : c
+          ),
+        })),
+
+      getCountersByService: (serviceId) =>
+        get().allCounters.filter((c) => c.service_ids.includes(serviceId)),
+
+      reset: () =>
+        set({ myCounter: null, allCounters: [], isLoading: false }),
+    }),
+    {
+      name: "tonde-counter",
+      partialize: (state) => ({ myCounter: state.myCounter }),
     }
-  },
-
-  loadAllCounters: async (branchId) => {
-    set({ isLoading: true });
-    try {
-      const counters = await apiService.getCounters(branchId);
-      await db.cacheCounters(counters);
-      set({ allCounters: counters, isLoading: false });
-    } catch {
-      const cached = await db.getCachedCounters(branchId);
-      set({ allCounters: cached, isLoading: false });
-    }
-  },
-
-  pauseCounter: async (counterId) => {
-    const { isOnline, enqueue } = useOfflineStore.getState();
-    const updateLocal = (status: CounterStatus) =>
-      set((state) => ({
-        myCounter: state.myCounter ? { ...state.myCounter, status } : null,
-        allCounters: state.allCounters.map((c) =>
-          c.id === counterId ? { ...c, status } : c
-        ),
-      }));
-
-    updateLocal("PAUSED");
-
-    if (isOnline) {
-      try {
-        await apiService.pauseCounter(counterId);
-      } catch {
-        await enqueue("PAUSE_COUNTER", { counter_id: counterId });
-      }
-    } else {
-      await enqueue("PAUSE_COUNTER", { counter_id: counterId });
-    }
-  },
-
-  resumeCounter: async (counterId) => {
-    const { isOnline, enqueue } = useOfflineStore.getState();
-    const updateLocal = (status: CounterStatus) =>
-      set((state) => ({
-        myCounter: state.myCounter ? { ...state.myCounter, status } : null,
-        allCounters: state.allCounters.map((c) =>
-          c.id === counterId ? { ...c, status } : c
-        ),
-      }));
-
-    updateLocal("OPEN");
-
-    if (isOnline) {
-      try {
-        await apiService.resumeCounter(counterId);
-      } catch {
-        await enqueue("RESUME_COUNTER", { counter_id: counterId });
-      }
-    } else {
-      await enqueue("RESUME_COUNTER", { counter_id: counterId });
-    }
-  },
-
-  closeCounter: async (counterId) => {
-    try {
-      await apiService.closeCounter(counterId);
-      set((state) => ({
-        myCounter: state.myCounter ? { ...state.myCounter, status: "CLOSED" } : null,
-        allCounters: state.allCounters.map((c) =>
-          c.id === counterId ? { ...c, status: "CLOSED" } : c
-        ),
-      }));
-    } catch (err) {
-      console.error("closeCounter error:", err);
-    }
-  },
-
-  openCounter: async (counterId, agentId) => {
-    try {
-      await apiService.openCounter(counterId, agentId);
-      set((state) => ({
-        allCounters: state.allCounters.map((c) =>
-          c.id === counterId ? { ...c, status: "OPEN", agent_id: agentId } : c
-        ),
-      }));
-    } catch (err) {
-      console.error("openCounter error:", err);
-    }
-  },
-
-  updateCounterFromWS: (counter) =>
-    set((state) => ({
-      myCounter:
-        state.myCounter?.id === counter.id ? { ...state.myCounter, ...counter } : state.myCounter,
-      allCounters: state.allCounters.map((c) =>
-        c.id === counter.id ? { ...c, ...counter } : c
-      ),
-    })),
-
-  getCountersByService: (serviceId) =>
-    get().allCounters.filter((c) => c.service_ids.includes(serviceId)),
-}));
+  )
+);

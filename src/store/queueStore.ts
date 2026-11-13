@@ -19,6 +19,7 @@ interface QueueState {
   getQueueByService: (serviceId: string) => Queue | undefined;
   getTotalWaiting: () => number;
   getNextTicket: (serviceIds: string[]) => Ticket | undefined;
+  reset: () => void;
 }
 
 export const useQueueStore = create<QueueState>()((set, get) => ({
@@ -35,7 +36,10 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
         apiService.getServices(branchId),
       ]);
       // Persist to SQLite for offline access
-      await db.cacheQueues(queues);
+      await Promise.all([
+        db.cacheQueues(queues, branchId),
+        db.cacheServices(services, branchId),
+      ]);
       set({ queues, services, isLoading: false, lastUpdated: new Date().toISOString() });
     } catch {
       // Fallback to SQLite cache
@@ -75,4 +79,7 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
       });
     return allWaiting[0];
   },
+
+  reset: () =>
+    set({ queues: [], services: [], isLoading: false, lastUpdated: null }),
 }));

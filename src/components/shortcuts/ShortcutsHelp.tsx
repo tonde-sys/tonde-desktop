@@ -52,7 +52,11 @@ export function ShortcutsHelp() {
             <Keyboard size={18} className="text-violet" />
             <span>{t("shortcuts.title")}</span>
           </div>
-          <button onClick={closeShortcutsHelp} className="btn-ghost p-1">
+          <button
+            onClick={closeShortcutsHelp}
+            className="btn-ghost p-1"
+            aria-label={t("common.close")}
+          >
             <X size={16} />
           </button>
         </div>
@@ -80,8 +84,16 @@ export function ShortcutsHelp() {
             label={t("shortcuts.recall")}
           />
           <ShortcutRow
+            keys={[SHORTCUTS.HELP.label]}
+            label={t("shortcuts.help")}
+          />
+          <ShortcutRow
+            keys={["Ctrl+L"]}
+            label={t("shortcuts.logout")}
+          />
+          <ShortcutRow
             keys={[SHORTCUTS.ESCAPE.label]}
-            label="Fermer ce dialogue"
+            label={t("common.close")}
           />
         </div>
 

@@ -33,16 +33,23 @@
     "markAbsent": "Absent",
     "transfer": "Transfer",
     "complete": "Done",
+    "priority": "Priority",
     "noTicket": "No tickets waiting",
     "currentTicket": "Current ticket",
     "nextTicket": "Next ticket",
+    "transferTitle": "Transfer ticket",
+    "transferSubtitle": "Choose the destination service for {{number}}",
+    "noTransferTarget": "No other service available",
     "status": {
       "waiting": "Waiting",
       "called": "Called",
       "serving": "Serving",
+      "processing": "Serving",
       "done": "Done",
+      "completed": "Done",
       "absent": "Absent",
-      "transferred": "Transferred"
+      "transferred": "Transferred",
+      "cancelled": "Cancelled"
     }
   },
   "queue": {
@@ -64,7 +71,16 @@
     "transfer": "Transfer ticket",
     "pause": "Pause / Resume",
     "recall": "Recall",
-    "help": "Shortcuts help"
+    "help": "Shortcuts help",
+    "logout": "Log out"
+  },
+  "common": {
+    "close": "Close",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "select": "select",
+    "enter": "Enter",
+    "escape": "Escape"
   },
   "errors": {
     "callNextFailed": "Failed to call ticket",

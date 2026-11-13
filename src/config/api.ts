@@ -19,8 +19,17 @@ const WS_URLS: Record<Environment, string> = {
   production: "wss://api.tonde.app/ws",
 };
 
-export const API_BASE_URL = import.meta.env.VITE_API_URL ?? API_URLS[ENV];
+export const API_BASE_URL = (import.meta.env.VITE_API_URL ?? API_URLS[ENV]).replace(/\/+$/, "");
 export const WS_BASE_URL = import.meta.env.VITE_WS_URL ?? WS_URLS[ENV];
+
+// API mock locale : jamais active dans un build de production.
+export const IS_MOCK_MODE =
+  import.meta.env.DEV &&
+  (import.meta.env.VITE_USE_MOCK === "true" || import.meta.env.VITE_USE_MOCK === "1");
+
+// Préfixe REST du backend FastAPI (contrat écosystème TONDE).
+// Surchargeable via VITE_API_PREFIX="" si le backend sert la racine.
+export const API_PREFIX = import.meta.env.VITE_API_PREFIX ?? "/api/v1";
 
 export const API_TIMEOUT_MS = 8_000;
 

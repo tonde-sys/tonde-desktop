@@ -33,16 +33,23 @@
     "markAbsent": "Absent",
     "transfer": "Transférer",
     "complete": "Terminer",
+    "priority": "Priorité",
     "noTicket": "Aucun ticket en attente",
     "currentTicket": "Ticket en cours",
     "nextTicket": "Prochain ticket",
+    "transferTitle": "Transférer le ticket",
+    "transferSubtitle": "Choisir le service de destination pour {{number}}",
+    "noTransferTarget": "Aucun autre service disponible",
     "status": {
       "waiting": "En attente",
       "called": "Appelé",
       "serving": "En service",
+      "processing": "En service",
       "done": "Terminé",
+      "completed": "Terminé",
       "absent": "Absent",
-      "transferred": "Transféré"
+      "transferred": "Transféré",
+      "cancelled": "Annulé"
     }
   },
   "queue": {
@@ -64,7 +71,16 @@
     "transfer": "Transférer",
     "pause": "Pause / Reprendre",
     "recall": "Rappeler",
-    "help": "Aide raccourcis"
+    "help": "Aide raccourcis",
+    "logout": "Se déconnecter"
+  },
+  "common": {
+    "close": "Fermer",
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "select": "sélectionner",
+    "enter": "Entrée",
+    "escape": "Échap"
   },
   "errors": {
     "callNextFailed": "Impossible d'appeler le ticket",

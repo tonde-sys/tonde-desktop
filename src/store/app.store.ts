@@ -4,17 +4,13 @@
 // ============================================================
 
 import { create } from "zustand";
-import type { ConnectionStatus, Notification } from "../types";
+import type { Notification } from "../types";
 import { nanoid } from "nanoid";
 
 interface AppState {
-  connectionStatus: ConnectionStatus;
   notifications: Notification[];
   isShortcutsHelpOpen: boolean;
   isTransferModalOpen: boolean;
-
-  // Connexion
-  setConnectionStatus: (status: ConnectionStatus) => void;
 
   // Notifications toast
   addNotification: (n: Omit<Notification, "id" | "created_at">) => void;
@@ -29,12 +25,9 @@ interface AppState {
 }
 
 export const useAppStore = create<AppState>()((set, get) => ({
-  connectionStatus: "DISCONNECTED",
   notifications: [],
   isShortcutsHelpOpen: false,
   isTransferModalOpen: false,
-
-  setConnectionStatus: (status) => set({ connectionStatus: status }),
 
   addNotification: (n) => {
     const notification: Notification = {

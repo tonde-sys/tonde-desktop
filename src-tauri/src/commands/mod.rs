@@ -2,4 +2,5 @@
 // TONDE DESKTOP — Commands module
 // ============================================================
 
+pub mod db;
 pub mod storage;

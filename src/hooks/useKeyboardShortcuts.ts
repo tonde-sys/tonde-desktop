@@ -1,12 +1,15 @@
 // ============================================================
 // TONDE DESKTOP — useKeyboardShortcuts
 // Gestion globale des raccourcis clavier (Keyboard First)
+// Matrice : Espace/F1 Appeler · A/F2 Absent · T/F3 Transférer
+//           P/F4 Pause · R Rappeler · F12 Aide · Ctrl+L Déconnexion
 // ============================================================
 
 import { useEffect, useCallback, useRef } from "react";
 import { useTicketStore } from "../store/ticketStore";
 import { useCounterStore } from "../store/counterStore";
 import { useAuthStore } from "../store/authStore";
+import { useAppStore } from "../store/app.store";
 
 export interface ShortcutHandlers {
   onCallNext?: () => void;
@@ -16,27 +19,57 @@ export interface ShortcutHandlers {
   onPause?: () => void;
   onHelp?: () => void;
   onEscape?: () => void;
+  onLogout?: () => void;
 }
 
-// Tags that should BLOCK shortcuts (user is typing)
+// Tags qui bloquent les raccourcis (l'agent saisit du texte)
 const BLOCK_TAGS = new Set(["INPUT", "TEXTAREA", "SELECT"]);
 
 export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
   const handlersRef = useRef(handlers);
-  handlersRef.current = handlers;
+
+  useEffect(() => {
+    handlersRef.current = handlers;
+  });
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     const target = e.target as HTMLElement;
 
-    // Block shortcuts when user is in input fields
     if (BLOCK_TAGS.has(target.tagName)) return;
     if (target.isContentEditable) return;
 
-    // Allow ESC and F1 even in dialogs (they close them)
     const { key } = e;
+
+    // Ctrl+L / Cmd+L — déconnexion
+    if ((e.ctrlKey || e.metaKey) && (key === "l" || key === "L")) {
+      e.preventDefault();
+      handlersRef.current.onLogout?.();
+      return;
+    }
+
+    // Les autres combinaisons avec modificateur sont laissées au système
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+    // Un appui maintenu ne doit jamais déclencher plusieurs actions
+    if (e.repeat) return;
+
+    // Un dialogue ouvert capture les actions métier : seuls Échap et
+    // l'aide restent actifs. Le modal de transfert gère ses flèches.
+    const { isShortcutsHelpOpen, isTransferModalOpen } =
+      useAppStore.getState();
+    if (isShortcutsHelpOpen || isTransferModalOpen) {
+      if (key === "Escape") {
+        handlersRef.current.onEscape?.();
+      } else if (key === "F12") {
+        e.preventDefault();
+        handlersRef.current.onHelp?.();
+      }
+      return;
+    }
 
     switch (key) {
       case " ": // ESPACE — Appeler suivant
+      case "F1":
         e.preventDefault();
         handlersRef.current.onCallNext?.();
         break;
@@ -49,23 +82,26 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
 
       case "a":
       case "A": // A — Absent
+      case "F2":
         e.preventDefault();
         handlersRef.current.onMarkAbsent?.();
         break;
 
       case "t":
       case "T": // T — Transférer
+      case "F3":
         e.preventDefault();
         handlersRef.current.onTransfer?.();
         break;
 
       case "p":
       case "P": // P — Pause
+      case "F4":
         e.preventDefault();
         handlersRef.current.onPause?.();
         break;
 
-      case "F1": // F1 — Aide
+      case "F12": // F12 — Aide
         e.preventDefault();
         handlersRef.current.onHelp?.();
         break;
@@ -95,19 +131,20 @@ export function useAgentShortcuts(options: {
 
   useKeyboardShortcuts({
     onCallNext: () => {
-      if (!myCounter || myCounter.status !== "OPEN") return;
       if (!user) return;
-      callNext(myCounter.id, myCounter.service_ids);
+      if (!myCounter || myCounter.status !== "OPEN") return;
+      if (currentTicket) return;
+      void callNext(myCounter.id, myCounter.service_ids);
     },
 
     onRecall: () => {
       if (!currentTicket || !myCounter) return;
-      recall(myCounter.id);
+      void recall(myCounter.id);
     },
 
     onMarkAbsent: () => {
       if (!currentTicket || !myCounter) return;
-      markAbsent(currentTicket.id, myCounter.id);
+      void markAbsent(currentTicket.id, myCounter.id);
     },
 
     onTransfer: () => {
@@ -118,14 +155,24 @@ export function useAgentShortcuts(options: {
     onPause: () => {
       if (!myCounter) return;
       if (myCounter.status === "OPEN") {
-        pauseCounter(myCounter.id);
+        void pauseCounter(myCounter.id);
       } else if (myCounter.status === "PAUSED") {
-        resumeCounter(myCounter.id);
+        void resumeCounter(myCounter.id);
       }
     },
 
     onHelp: options.onOpenHelp,
     onEscape: options.onCloseDialog,
+
+    onLogout: () => {
+      void (async () => {
+        const counter = useCounterStore.getState().myCounter;
+        if (counter) {
+          await useCounterStore.getState().closeCounter(counter.id);
+        }
+        await useAuthStore.getState().logout();
+      })();
+    },
   });
 }
 

@@ -13,10 +13,7 @@ import type {
   Employee,
   AgentStats,
 } from "../../types";
-
-const BASE_URL = import.meta.env.VITE_API_URL || "https://api.tonde.app";
-const TIMEOUT_MS = 8000;
-const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true" || import.meta.env.VITE_USE_MOCK === "1";
+import { API_BASE_URL, API_PREFIX, API_TIMEOUT_MS, IS_MOCK_MODE } from "../../config/api";
 
 // ---- Mock Data ----
 
@@ -37,7 +34,7 @@ const MOCK_COUNTERS: Counter[] = [
   { id: "counter-004", number: 4, name: "Guichet 4", status: "CLOSED", service_ids: ["svc-003"], branch_id: MOCK_BRANCH_ID },
 ];
 
-let mockTickets: Ticket[] = [
+const mockTickets: Ticket[] = [
   { id: "ticket-001", number: "A-001", status: "WAITING", priority: 0, service_id: "svc-001", branch_id: MOCK_BRANCH_ID, created_at: new Date(Date.now() - 300000).toISOString() },
   { id: "ticket-002", number: "A-002", status: "WAITING", priority: 1, service_id: "svc-001", branch_id: MOCK_BRANCH_ID, created_at: new Date(Date.now() - 240000).toISOString() },
   { id: "ticket-003", number: "A-003", status: "WAITING", priority: 0, service_id: "svc-001", branch_id: MOCK_BRANCH_ID, created_at: new Date(Date.now() - 180000).toISOString() },
@@ -77,9 +74,12 @@ const mockApi = {
 
   async callNextTicket(_counterId: string, serviceIds: string[]): Promise<Ticket> {
     await delay(300);
-    const availableTickets = mockTickets.filter(
-      t => t.status === "WAITING" && serviceIds.includes(t.service_id)
-    );
+    const availableTickets = mockTickets
+      .filter(t => t.status === "WAITING" && serviceIds.includes(t.service_id))
+      .sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
     if (availableTickets.length === 0) {
       throw new Error("Aucun ticket en attente");
     }
@@ -128,7 +128,9 @@ const mockApi = {
     await delay(300);
     const ticket = mockTickets.find(t => t.id === ticketId);
     if (ticket) {
-      ticket.status = "CALLED";
+      ticket.status = "WAITING";
+      ticket.service_id = _toServiceId;
+      ticket.called_at = undefined;
     }
   },
 
@@ -231,8 +233,71 @@ function delay(ms: number): Promise<void> {
 
 // ---- HTTP Client ----
 
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status = 0, code?: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+type RefreshHandler = () => Promise<string | null>;
+type UnauthorizedHandler = () => void | Promise<void>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function extractErrorMessage(payload: unknown, fallback: string): string {
+  if (typeof payload === "string" && payload.trim()) return payload;
+  if (isRecord(payload)) {
+    // Contrat TONDE : { detail: { code, message } }
+    if (isRecord(payload.detail) && typeof payload.detail.message === "string") {
+      return payload.detail.message;
+    }
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail;
+    }
+    // FastAPI : { detail: "..." } ou { message: "..." }
+    if (typeof payload.message === "string" && payload.message.trim()) {
+      return payload.message;
+    }
+  }
+  return fallback;
+}
+
+function extractErrorCode(payload: unknown): string | undefined {
+  if (!isRecord(payload)) return undefined;
+  if (isRecord(payload.detail) && typeof payload.detail.code === "string") {
+    return payload.detail.code;
+  }
+  return typeof payload.code === "string" ? payload.code : undefined;
+}
+
+function unwrapEnvelope<T>(payload: unknown, status: number): T {
+  // Contrat écosystème : { success, data, message }
+  if (isRecord(payload) && typeof payload.success === "boolean") {
+    if (!payload.success) {
+      throw new ApiError(
+        extractErrorMessage(payload, "Opération refusée par le serveur"),
+        status,
+        extractErrorCode(payload)
+      );
+    }
+    return payload.data as T;
+  }
+  // Réponse brute (backend pas encore aligné sur l'enveloppe)
+  return payload as T;
+}
+
 class ApiClient {
   private token: string | null = null;
+  private refreshHandler: RefreshHandler | null = null;
+  private unauthorizedHandler: UnauthorizedHandler | null = null;
 
   setToken(token: string): void {
     this.token = token;
@@ -242,34 +307,83 @@ class ApiClient {
     this.token = null;
   }
 
-  private async request<T>(
+  setRefreshHandler(handler: RefreshHandler | null): void {
+    this.refreshHandler = handler;
+  }
+
+  setUnauthorizedHandler(handler: UnauthorizedHandler | null): void {
+    this.unauthorizedHandler = handler;
+  }
+
+  private async send(
     method: string,
     path: string,
     body?: unknown
-  ): Promise<T> {
+  ): Promise<Response> {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
     try {
-      const res = await fetch(`${BASE_URL}${path}`, {
+      return await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
         method,
         headers: {
           "Content-Type": "application/json",
           ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         },
-        body: body ? JSON.stringify(body) : undefined,
+        body: body !== undefined ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: "Erreur serveur" }));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") {
+        throw new ApiError(
+          "Le serveur TONDE ne répond pas (délai dépassé).",
+          0,
+          "TIMEOUT"
+        );
       }
-
-      return res.json();
+      throw new ApiError(
+        "Serveur TONDE injoignable. Vérifiez votre connexion.",
+        0,
+        "NETWORK"
+      );
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    allowRefresh = true
+  ): Promise<T> {
+    const res = await this.send(method, path, body);
+    const payload: unknown = await res.json().catch(() => null);
+
+    const isAuthPath = path.startsWith("/auth/");
+    if (
+      res.status === 401 &&
+      allowRefresh &&
+      !isAuthPath &&
+      this.refreshHandler
+    ) {
+      const newToken = await this.refreshHandler();
+      if (newToken) {
+        this.token = newToken;
+        return this.request<T>(method, path, body, false);
+      }
+      await this.unauthorizedHandler?.();
+    }
+
+    if (!res.ok) {
+      throw new ApiError(
+        extractErrorMessage(payload, `Erreur serveur (${res.status})`),
+        res.status,
+        extractErrorCode(payload)
+      );
+    }
+
+    return unwrapEnvelope<T>(payload, res.status);
   }
 
   get<T>(path: string): Promise<T> {
@@ -301,7 +415,7 @@ export const httpClient = new ApiClient();
 export const mockApiService = mockApi;
 
 // Si VITE_USE_MOCK=true, on utilise le mock
-const apiImpl = USE_MOCK ? mockApi : null;
+const apiImpl = IS_MOCK_MODE ? mockApi : null;
 
 export const apiService = {
   // Auth
@@ -355,9 +469,12 @@ export const apiService = {
     toServiceId: string
   ): Promise<void> {
     if (apiImpl) return apiImpl.transferTicket(ticketId, toCounterId, toServiceId);
+    // Le contrat écosystème TONDE utilise `target_service_id` ; on
+    // conserve `to_service_id` pour le backend en cours d'alignement.
     await httpClient.post(`/tickets/${ticketId}/transfer`, {
-      to_counter_id: toCounterId,
+      target_service_id: toServiceId,
       to_service_id: toServiceId,
+      ...(toCounterId ? { to_counter_id: toCounterId } : {}),
     });
   },
 

@@ -64,13 +64,14 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
     const { isSyncing, syncQueue } = get();
     if (isSyncing) return;
 
-    const pending = syncQueue.filter((i) => i.status === "PENDING" || i.status === "FAILED");
+    // Seuls les PENDING sont rejoués : un FAILED a déjà épuisé ses
+    // tentatives et ne doit pas boucler indéfiniment.
+    const pending = syncQueue.filter((i) => i.status === "PENDING");
     if (pending.length === 0) return;
 
     set({ isSyncing: true });
 
     for (const item of pending) {
-      // Mark as syncing
       set((state) => ({
         syncQueue: state.syncQueue.map((i) =>
           i.id === item.id ? { ...i, status: "SYNCING" } : i
@@ -80,24 +81,38 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
 
       try {
         await dispatchSyncAction(item);
-        // Mark as done
         const done: SyncQueueItem = {
           ...item,
           status: "DONE",
           synced_at: new Date().toISOString(),
+          error: undefined,
         };
-        await db.updateSyncItemStatus(item.id, "DONE", done.synced_at);
+        await db.updateSyncItemStatus(
+          item.id,
+          "DONE",
+          done.synced_at,
+          item.retry_count
+        );
         set((state) => ({
           syncQueue: state.syncQueue.map((i) => (i.id === item.id ? done : i)),
         }));
       } catch (err) {
+        const retryCount = item.retry_count + 1;
+        const message =
+          err instanceof Error ? err.message : "Échec de synchronisation";
         const failed: SyncQueueItem = {
           ...item,
-          status: item.retry_count >= 3 ? "FAILED" : "PENDING",
-          retry_count: item.retry_count + 1,
-          error: err instanceof Error ? err.message : "Sync failed",
+          status: retryCount >= 3 ? "FAILED" : "PENDING",
+          retry_count: retryCount,
+          error: message,
         };
-        await db.updateSyncItemStatus(item.id, failed.status);
+        await db.updateSyncItemStatus(
+          item.id,
+          failed.status,
+          undefined,
+          retryCount,
+          message
+        );
         set((state) => ({
           syncQueue: state.syncQueue.map((i) => (i.id === item.id ? failed : i)),
         }));
@@ -109,7 +124,18 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
 
   loadSyncQueue: async () => {
     const items = await db.getSyncQueue();
-    set({ syncQueue: items });
+    const recovered: SyncQueueItem[] = [];
+    for (const item of items) {
+      if (item.status === "SYNCING") {
+        // Crash en pleine synchronisation : l'action redevient PENDING.
+        // Les commandes backend sont idempotentes par ticket.
+        await db.updateSyncItemStatus(item.id, "PENDING");
+        recovered.push({ ...item, status: "PENDING" });
+      } else {
+        recovered.push(item);
+      }
+    }
+    set({ syncQueue: recovered });
   },
 
   clearCompleted: async () => {
@@ -153,6 +179,15 @@ async function dispatchSyncAction(item: SyncQueueItem): Promise<void> {
       break;
     case "RESUME_COUNTER":
       await apiService.resumeCounter(p.counter_id as string);
+      break;
+    case "OPEN_COUNTER":
+      await apiService.openCounter(
+        p.counter_id as string,
+        p.agent_id as string
+      );
+      break;
+    case "CLOSE_COUNTER":
+      await apiService.closeCounter(p.counter_id as string);
       break;
     default:
       throw new Error(`Unknown sync action: ${item.action}`);

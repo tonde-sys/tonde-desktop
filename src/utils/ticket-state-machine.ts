@@ -6,9 +6,11 @@
 import type { TicketStatus } from "../types";
 
 // Transitions autorisées : from → [to, ...]
+// Le guichet clôture directement un ticket CALLED (le backend
+// traverse CALLED → SERVING → DONE en une seule commande).
 const TRANSITIONS: Partial<Record<TicketStatus, TicketStatus[]>> = {
   WAITING: ["CALLED"],
-  CALLED: ["PROCESSING", "ABSENT", "CANCELLED"],
+  CALLED: ["PROCESSING", "COMPLETED", "ABSENT", "CANCELLED"],
   PROCESSING: ["COMPLETED", "ABSENT", "CANCELLED"],
 };
 
@@ -17,7 +19,7 @@ type TicketAction = "call" | "startService" | "markAbsent" | "complete" | "trans
 
 const AVAILABLE_ACTIONS: Partial<Record<TicketStatus, TicketAction[]>> = {
   WAITING: ["call"],
-  CALLED: ["startService", "markAbsent", "transfer"],
+  CALLED: ["startService", "complete", "markAbsent", "transfer"],
   PROCESSING: ["complete", "markAbsent", "transfer", "cancel"],
 };
 

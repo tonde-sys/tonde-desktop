@@ -9,13 +9,13 @@ import type {
   QueueUpdatePayload,
   CounterStatusPayload,
 } from "../types";
+import { IS_MOCK_MODE, WS_BASE_URL } from "../config/api";
 import { useOfflineStore } from "../store/offlineStore";
 import { useQueueStore } from "../store/queueStore";
 import { useCounterStore } from "../store/counterStore";
 
 type EventHandler<T = unknown> = (payload: T) => void;
 
-const WS_BASE_URL = "ws://api.tonde.app/ws/queue";
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
@@ -35,6 +35,26 @@ class WebSocketManager {
   // ---- Public API ----
 
   connect(branchId: string, token: string): void {
+    // Pas de backend temps réel derrière l'API mock.
+    if (IS_MOCK_MODE) {
+      useOfflineStore.getState().setOnline(true);
+      useOfflineStore.getState().setConnectionStatus("CONNECTED");
+      return;
+    }
+
+    const alreadyConnected =
+      this.ws !== null &&
+      this.branchId === branchId &&
+      this.token === token &&
+      (this.ws.readyState === WebSocket.OPEN ||
+        this.ws.readyState === WebSocket.CONNECTING);
+    if (alreadyConnected) return;
+
+    this.isIntentionallyClosed = true;
+    this._clearTimers();
+    this.ws?.close(1000, "Reconnect");
+    this.ws = null;
+
     this.branchId = branchId;
     this.token = token;
     this.isIntentionallyClosed = false;
@@ -72,7 +92,7 @@ class WebSocketManager {
 
     useOfflineStore.getState().setConnectionStatus("RECONNECTING");
 
-    const url = `${WS_BASE_URL}/${this.branchId}?token=${this.token}`;
+    const url = `${WS_BASE_URL}/${encodeURIComponent(this.branchId)}?token=${encodeURIComponent(this.token)}`;
 
     try {
       this.ws = new WebSocket(url);
@@ -102,7 +122,9 @@ class WebSocketManager {
       this._stopPing();
       if (this.isIntentionallyClosed) return;
 
-      useOfflineStore.getState().setOnline(false);
+      // Le WebSocket peut tomber alors que l'HTTP fonctionne encore :
+      // on signale une reconnexion, pas une perte réseau globale.
+      useOfflineStore.getState().setConnectionStatus("RECONNECTING");
 
       // Start polling fallback
       this._startPolling();

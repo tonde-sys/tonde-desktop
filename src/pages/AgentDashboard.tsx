@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { AgentLayout } from "../components/layout/AgentLayout";
 import { ShortcutsHelp } from "../components/shortcuts/ShortcutsHelp";
+import { TransferModal } from "../components/ticket/TransferModal";
 import { useAppStore } from "../store/app.store";
 import { useCounterStore } from "../store/counterStore";
 import { useTicketStore } from "../store/ticketStore";
@@ -31,6 +32,9 @@ export function AgentDashboard() {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
   const myCounter = useCounterStore((s) => s.myCounter);
+  const loadMyCounter = useCounterStore((s) => s.loadMyCounter);
+  const pauseCounter = useCounterStore((s) => s.pauseCounter);
+  const resumeCounter = useCounterStore((s) => s.resumeCounter);
   const { currentTicket, isLoading, callNext, markAbsent, recall, complete } =
     useTicketStore();
   const { queues, loadQueues } = useQueueStore();
@@ -39,6 +43,15 @@ export function AgentDashboard() {
   // Préchargement sons au montage
   useEffect(() => {
     preloadSounds();
+  }, []);
+
+  // Rafraîchit l'état réel du guichet au démarrage (cache persisté)
+  useEffect(() => {
+    if (myCounter?.id) {
+      void loadMyCounter(myCounter.id);
+    }
+    // Au montage uniquement : myCounter est ensuite piloté par le store
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Chargement initial de la file
@@ -63,12 +76,18 @@ export function AgentDashboard() {
     onCloseDialog: closeAllDialogs,
   });
 
-  const totalWaiting = queues.reduce((s, q) => s + q.waiting_count, 0);
   const serviceIds = myCounter?.service_ids ?? [];
+  const relevantQueues = queues.filter((q) =>
+    serviceIds.includes(q.service_id)
+  );
+  const totalWaiting = relevantQueues.reduce(
+    (sum, q) => sum + q.waiting_count,
+    0
+  );
 
   const handleCallNext = () => {
-    if (!myCounter || myCounter.status !== "OPEN") return;
-    callNext(myCounter.id, serviceIds);
+    if (!myCounter || myCounter.status !== "OPEN" || currentTicket) return;
+    void callNext(myCounter.id, serviceIds);
   };
 
   const handleMarkAbsent = () => {
@@ -86,8 +105,17 @@ export function AgentDashboard() {
     complete(currentTicket.id, myCounter.id);
   };
 
+  const handlePauseToggle = () => {
+    if (!myCounter) return;
+    if (myCounter.status === "PAUSED") {
+      void resumeCounter(myCounter.id);
+    } else {
+      void pauseCounter(myCounter.id);
+    }
+  };
+
   return (
-    <AgentLayout onPause={() => {}}>
+    <AgentLayout onPause={handlePauseToggle}>
       <div className="h-full grid grid-cols-[1fr_320px] gap-0">
         {/* ── Zone principale : ticket en cours ── */}
         <div className="flex flex-col items-center justify-center gap-8 px-8 border-r border-border-subtle">
@@ -194,7 +222,7 @@ export function AgentDashboard() {
 
           {/* Liste tickets en attente */}
           <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-            {queues
+            {relevantQueues
               .flatMap((q) => q.tickets)
               .filter((t) => t.status === "WAITING")
               .slice(0, 15)
@@ -213,7 +241,7 @@ export function AgentDashboard() {
                   </div>
                   {ticket.priority > 0 && (
                     <span className="text-amber text-xs font-medium">
-                      Priorité
+                      {t("ticket.priority")}
                     </span>
                   )}
                 </div>
@@ -230,6 +258,8 @@ export function AgentDashboard() {
 
       {/* Overlay aide raccourcis */}
       <ShortcutsHelp />
+      {/* Modale de transfert */}
+      <TransferModal />
     </AgentLayout>
   );
 }

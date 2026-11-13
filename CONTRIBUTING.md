@@ -1,105 +1,111 @@
-# Guide de contribution — TONDE Backend
+# Guide de contribution — TONDE Desktop
 
-> Ce document explique comment travailler en équipe sur le projet TONDE.
-> Lis-le entièrement avant de toucher au code.
+> Application desktop du guichetier (Tauri 2 + React 19).
+> Lis ce guide et [TEAM_WORKFLOW.md](TEAM_WORKFLOW.md) avant de toucher au code.
 
 ---
 
-## 1. Récupérer le projet (une seule fois)
+## 1. Installer le projet (une seule fois)
 
 ```bash
-git clone https://github.com/TONDE-APP/tonde-backend-.git
-cd tonde-backend-
-cp .env.example .env
-# Remplis le .env avec tes valeurs
-docker-compose up -d --build
+git clone https://github.com/TONDE-APP/tonde-desktop.git
+cd tonde-desktop
+npm install
+cp .env.example .env.local
 ```
+
+Prérequis détaillés (Node 20+, Rust stable, MSVC, WebView2) : voir [README.md](README.md).
+
+Pour travailler sans backend : `npm run dev` avec `VITE_USE_MOCK=true` dans `.env.local`.
+L'API mock ne fonctionne **qu'en mode DEV**.
 
 ---
 
-## 2. Avant de commencer à travailler
+## 2. Workflow Git
 
-**Toujours partir de la version la plus récente.**
+`main` est protégée. **On ne pousse jamais directement sur `main`.**
 
 ```bash
 git checkout main
 git pull origin main
+git checkout -b feat/nom-de-ta-tache
 ```
-
----
-
-## 3. Créer ta branche de travail
-
-Ne jamais travailler directement sur `main`.
-
-```bash
-git checkout -b feat/nom-de-ce-que-tu-fais
-```
-
-**Conventions de nommage :**
 
 | Préfixe | Quand l'utiliser |
 |---------|-----------------|
 | `feat/` | Nouvelle fonctionnalité |
-| `fix/` | Correction d'un bug |
-| `chore/` | Configuration, dépendances |
+| `fix/` | Correction de bug |
+| `chore/` | Outillage, dépendances, CI |
 | `docs/` | Documentation |
 
-Exemples :
+Ensuite : commits clairs → `git push -u origin feat/...` → Pull Request →
+review de Vital → merge. Détail du processus dans [TEAM_WORKFLOW.md](TEAM_WORKFLOW.md).
+
+### Messages de commit
+
+Format `type: description courte à l'impératif` (français accepté) :
+
 ```
-feat/organizations-module
-feat/counter-endpoints
-fix/ticket-status-transition
-docs/update-readme
+feat: transfert de ticket au clavier
+fix: le comptoir reste ouvert après reconnexion
+chore: ajouter la CI GitHub Actions
 ```
 
 ---
 
-## 4. Coder et tester
-
-Fais ton travail. Avant de pousser, vérifie que les tests passent :
+## 3. Vérifications avant de pousser
 
 ```bash
-docker-compose exec api pytest --tb=short -q
+npm run build        # TypeScript strict + build Vite
+npm test             # tests unitaires Vitest
+cd src-tauri && cargo check && cargo test
 ```
 
----
-
-## 5. Sauvegarder et pousser
-
-```bash
-git add .
-git commit -m "feat: description claire de ce que tu as fait"
-git push -u origin feat/nom-de-ta-branche
-```
+La CI (`.github/workflows/ci.yml`) exécute les mêmes vérifications sur Windows.
+Une PR qui casse `main` doit être corrigée avant merge.
 
 ---
 
-## 6. Ouvrir un Pull Request
+## 4. Conventions de code
 
-1. Va sur `https://github.com/TONDE-APP/tonde-backend-`
-2. Clique le bouton vert **"Compare & pull request"**
-3. Remplis le titre et la description
-4. Coche toutes les cases de la checklist
-5. Clique **"Create pull request"**
-
-**Vital reçoit une notification, review ton code, et approuve ou commente.**
-
-Tu ne peux pas merger toi-même. C'est voulu.
-
----
-
-## 7. Après approbation et merge
-
-```bash
-git checkout main
-git pull origin main
-git branch -d feat/nom-de-ta-branche
-```
+- **TypeScript strict** : pas de `any` non justifié, typer les retours d'API
+  dans `src/types/`.
+- **UI bilingue** : toute chaîne visible passe par `react-i18next`
+  (`src/locales/fr.json` et `en.json`). Pas de texte en dur dans les composants.
+- **Commentaires** : en français, uniquement pour expliquer le *pourquoi*
+  (contrainte cachée, contournement, invariant).
+- **Client HTTP unique** : tout appel réseau passe par `src/services/api/apiService.ts`
+  (gestion d'erreur, enveloppe, refresh 401, timeout). Ne pas recréer de `fetch` ad hoc.
+- **Persistance** : le cache local passe par `src/services/database/db.ts` → commandes
+  Rust `db_*`. Le frontend doit rester fonctionnel hors Tauri (fallbacks silencieux).
+- **Raccourcis clavier** : les définitions vivent dans `src/config/shortcuts.ts`
+  et le dispatcher dans `src/hooks/useKeyboardShortcuts.ts`. Toute nouvelle action
+  clavier doit être ajoutée aux deux et à l'aide `F12`.
+- **Tests** : les fonctions pures (state machine, client API, stores) sont testées
+  avec Vitest. Un correctif de bug mérite un test de non-régression.
 
 ---
 
-## Règle d'or
+## 5. Règles de sécurité
 
-> **On ne pousse jamais directement sur `main`.
-> On crée une branche → on travaille → on ouvre un PR → on attend l'approbation de Vital.**
+- **Jamais de secret dans le repo** : ni token, ni mot de passe, ni clé d'API,
+  ni dans `.env.local` versionné. `.env.example` ne contient que des valeurs locales.
+- **Jamais de token dans `localStorage`** : le token est géré par
+  `src/services/secure/tokenStorage.ts` (coffre OS via Rust en production,
+  `sessionStorage` uniquement en dev navigateur).
+- **Jamais d'appel à l'API mock en production** : le mock est verrouillé derrière
+  `import.meta.env.DEV`.
+- Les erreurs affichées à l'agent ne doivent jamais exposer un token, une réponse
+  brute du serveur ou une trace technique.
+
+---
+
+## 6. Checklist Pull Request
+
+- [ ] Branche à jour depuis `main`
+- [ ] `npm run build` passe
+- [ ] `npm test` passe
+- [ ] `cargo check` + `cargo test` passent (si `src-tauri/` modifié)
+- [ ] Chaînes UI ajoutées dans `fr.json` **et** `en.json`
+- [ ] Aucun secret, aucune donnée personnelle dans le diff
+- [ ] Testé en mode mock (navigateur) et, si possible, en fenêtre Tauri

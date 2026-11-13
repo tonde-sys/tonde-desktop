@@ -155,7 +155,9 @@ export type SyncActionType =
   | "COMPLETE_TICKET"
   | "TRANSFER_TICKET"
   | "PAUSE_COUNTER"
-  | "RESUME_COUNTER";
+  | "RESUME_COUNTER"
+  | "OPEN_COUNTER"
+  | "CLOSE_COUNTER";
 
 export type SyncStatus = "PENDING" | "SYNCING" | "DONE" | "FAILED";
 
