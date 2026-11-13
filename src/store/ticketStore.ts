@@ -413,7 +413,22 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         } catch (err) {
           if (isNetworkFailure(err)) {
             useOfflineStore.getState().setOnline(false);
-          } else if (!isTimeoutFailure(err)) {
+          } else if (isTimeoutFailure(err)) {
+            // Réponse perdue : le transfert a peut-être été appliqué. On
+            // n'enfile pas (le rejeu échouerait) et on rend le ticket au
+            // guichet en signalant l'incertitude.
+            set({
+              currentTicket: ticket,
+              processingStartedAt: previousStartedAt,
+            });
+            refreshQueues();
+            notify(
+              "warning",
+              "Transfert incertain",
+              "Le serveur n'a pas répondu. Vérifiez la file avant de réessayer."
+            );
+            return false;
+          } else {
             throw err;
           }
         }

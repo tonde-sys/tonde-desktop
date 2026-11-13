@@ -268,9 +268,11 @@ async function dispatchSyncAction(item: SyncQueueItem): Promise<void> {
       await apiService.resumeCounter(p.counter_id as string);
       break;
     case "OPEN_COUNTER":
+      // Rejeu après coupure : l'ouverture a peut-être déjà abouti.
       await apiService.openCounter(
         p.counter_id as string,
-        p.agent_id as string
+        p.agent_id as string,
+        true
       );
       break;
     case "CLOSE_COUNTER":

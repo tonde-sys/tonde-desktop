@@ -16,8 +16,14 @@ describe("machine à états ticket", () => {
   it("autorise la clôture directe d'un ticket CALLED", () => {
     expect(canTransition("CALLED", "COMPLETED")).toBe(true);
     expect(canTransition("CALLED", "ABSENT")).toBe(true);
-    expect(canTransition("CALLED", "CANCELLED")).toBe(true);
+    expect(canTransition("CALLED", "CANCELLED")).toBe(false);
     expect(canTransition("CALLED", "WAITING")).toBe(false);
+  });
+
+  it("interdit l'absence et l'annulation depuis un ticket en service", () => {
+    expect(canTransition("PROCESSING", "COMPLETED")).toBe(true);
+    expect(canTransition("PROCESSING", "ABSENT")).toBe(false);
+    expect(canTransition("PROCESSING", "CANCELLED")).toBe(false);
   });
 
   it("interdit toute transition depuis un état terminal", () => {
@@ -32,9 +38,10 @@ describe("machine à états ticket", () => {
     expect(getAvailableActions("WAITING")).toEqual(["call"]);
     expect(getAvailableActions("CALLED")).toContain("complete");
     expect(getAvailableActions("CALLED")).toContain("markAbsent");
-    expect(getAvailableActions("PROCESSING")).toContain("cancel");
+    expect(getAvailableActions("PROCESSING")).toEqual(["complete", "transfer"]);
     expect(canPerformAction("WAITING", "markAbsent")).toBe(false);
     expect(canPerformAction("CALLED", "markAbsent")).toBe(true);
+    expect(canPerformAction("PROCESSING", "markAbsent")).toBe(false);
   });
 
   it("assertTransition lève une erreur explicite sur transition interdite", () => {

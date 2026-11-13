@@ -990,7 +990,14 @@ export const apiService = {
 
   async markTicketAbsent(ticketId: string, _counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.markTicketAbsent(ticketId, _counterId);
-    await httpClient.post(`/tickets/${ticketId}/absent`);
+    try {
+      await httpClient.post(`/tickets/${ticketId}/absent`);
+    } catch (err) {
+      // Rejeu après coupure : le ticket peut déjà être absent ou clos.
+      if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
+        throw err;
+      }
+    }
   },
 
   async completeTicket(ticketId: string, _counterId: string): Promise<void> {
@@ -1062,9 +1069,13 @@ export const apiService = {
     await closeCounterRemote(counterId);
   },
 
-  async openCounter(counterId: string, _agentId: string): Promise<void> {
+  async openCounter(
+    counterId: string,
+    _agentId: string,
+    allowAlreadyOpen = false
+  ): Promise<void> {
     if (apiImpl) return apiImpl.openCounter(counterId, _agentId);
-    await openCounterRemote(counterId);
+    await openCounterRemote(counterId, allowAlreadyOpen);
   },
 
   // ---- Queues & Services ----
