@@ -7,6 +7,7 @@ import { useTranslation } from "react-i18next";
 import { useAppStore } from "../../store/app.store";
 import { X, Keyboard } from "lucide-react";
 import { SHORTCUTS } from "../../config/shortcuts";
+import { IS_MOCK_MODE } from "../../config/api";
 
 interface ShortcutRowProps {
   keys: string[];
@@ -68,6 +69,10 @@ export function ShortcutsHelp() {
             label={t("shortcuts.callNext")}
           />
           <ShortcutRow
+            keys={[SHORTCUTS.COMPLETE.label]}
+            label={t("shortcuts.complete")}
+          />
+          <ShortcutRow
             keys={[SHORTCUTS.MARK_ABSENT.label, SHORTCUTS.MARK_ABSENT_F2.label]}
             label={t("shortcuts.markAbsent")}
           />
@@ -79,10 +84,12 @@ export function ShortcutsHelp() {
             keys={[SHORTCUTS.PAUSE.label, SHORTCUTS.PAUSE_F4.label]}
             label={t("shortcuts.pause")}
           />
-          <ShortcutRow
-            keys={[SHORTCUTS.RECALL.label]}
-            label={t("shortcuts.recall")}
-          />
+          {IS_MOCK_MODE && (
+            <ShortcutRow
+              keys={[SHORTCUTS.RECALL.label]}
+              label={t("shortcuts.recall")}
+            />
+          )}
           <ShortcutRow
             keys={[SHORTCUTS.HELP.label]}
             label={t("shortcuts.help")}

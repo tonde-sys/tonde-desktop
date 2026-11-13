@@ -1,8 +1,8 @@
 // ============================================================
 // TONDE DESKTOP — useKeyboardShortcuts
 // Gestion globale des raccourcis clavier (Keyboard First)
-// Matrice : Espace/F1 Appeler · A/F2 Absent · T/F3 Transférer
-//           P/F4 Pause · R Rappeler · F12 Aide · Ctrl+L Déconnexion
+// Matrice : Espace/F1 Appeler · Entrée Terminer · A/F2 Absent
+//           T/F3 Transférer · P/F4 Pause · F12 Aide · Ctrl+L Déconnexion
 // ============================================================
 
 import { useEffect, useCallback, useRef } from "react";
@@ -10,10 +10,12 @@ import { useTicketStore } from "../store/ticketStore";
 import { useCounterStore } from "../store/counterStore";
 import { useAuthStore } from "../store/authStore";
 import { useAppStore } from "../store/app.store";
+import { IS_MOCK_MODE } from "../config/api";
 
 export interface ShortcutHandlers {
   onCallNext?: () => void;
   onRecall?: () => void;
+  onComplete?: () => void;
   onMarkAbsent?: () => void;
   onTransfer?: () => void;
   onPause?: () => void;
@@ -53,6 +55,15 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
     // Un appui maintenu ne doit jamais déclencher plusieurs actions
     if (e.repeat) return;
 
+    // Sur un bouton/lien déjà focalisé, Espace et Entrée gardent leur
+    // comportement natif (clic) : pas de double action.
+    if (
+      (key === " " || key === "Enter") &&
+      target.closest("button, a, [role='button']")
+    ) {
+      return;
+    }
+
     // Un dialogue ouvert capture les actions métier : seuls Échap et
     // l'aide restent actifs. Le modal de transfert gère ses flèches.
     const { isShortcutsHelpOpen, isTransferModalOpen } =
@@ -72,6 +83,11 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
       case "F1":
         e.preventDefault();
         handlersRef.current.onCallNext?.();
+        break;
+
+      case "Enter": // ENTRÉE — Terminer le ticket en cours
+        e.preventDefault();
+        handlersRef.current.onComplete?.();
         break;
 
       case "r":
@@ -125,7 +141,8 @@ export function useAgentShortcuts(options: {
   onOpenHelp: () => void;
   onCloseDialog: () => void;
 }) {
-  const { callNext, recall, markAbsent, currentTicket } = useTicketStore();
+  const { callNext, recall, complete, markAbsent, currentTicket } =
+    useTicketStore();
   const { myCounter, pauseCounter, resumeCounter } = useCounterStore();
   const { user } = useAuthStore();
 
@@ -137,9 +154,16 @@ export function useAgentShortcuts(options: {
       void callNext(myCounter.id, myCounter.service_ids);
     },
 
-    onRecall: () => {
+    onRecall: IS_MOCK_MODE
+      ? () => {
+          if (!currentTicket || !myCounter) return;
+          void recall(myCounter.id);
+        }
+      : undefined,
+
+    onComplete: () => {
       if (!currentTicket || !myCounter) return;
-      void recall(myCounter.id);
+      void complete(currentTicket.id, myCounter.id);
     },
 
     onMarkAbsent: () => {
@@ -185,7 +209,7 @@ export function useShortcutAvailability() {
   const canCallNext =
     !isLoading && !!myCounter && myCounter.status === "OPEN" && !currentTicket;
 
-  const canRecall = !isLoading && !!currentTicket && !!myCounter;
+  const canRecall = IS_MOCK_MODE && !isLoading && !!currentTicket && !!myCounter;
   const canMarkAbsent = !isLoading && !!currentTicket && !!myCounter;
   const canTransfer = !isLoading && !!currentTicket;
   const canPause = !!myCounter && myCounter.status !== "CLOSED";

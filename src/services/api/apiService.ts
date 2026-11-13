@@ -1,6 +1,8 @@
 // ============================================================
 // TONDE DESKTOP — API Service
-// Client HTTP vers FastAPI backend
+// Client HTTP vers le backend FastAPI déployé sur Render.
+// Contrat : /api/v1 — auth JWT, counters scopés org/branche,
+// tickets guichet, écran public de branche.
 // ============================================================
 
 import type {
@@ -11,9 +13,18 @@ import type {
   Queue,
   Service,
   Employee,
+  EmployeeRole,
   AgentStats,
 } from "../../types";
-import { API_BASE_URL, API_PREFIX, API_TIMEOUT_MS, IS_MOCK_MODE } from "../../config/api";
+import {
+  API_BASE_URL,
+  API_PREFIX,
+  API_TIMEOUT_MS,
+  IS_MOCK_MODE,
+  TONDE_BRANCH_ID,
+  TONDE_ORG_ID,
+} from "../../config/api";
+import { appFetch } from "./nativeFetch";
 
 // ---- Mock Data ----
 
@@ -57,19 +68,24 @@ const mockApi = {
         branch_id: MOCK_BRANCH_ID,
         branch_name: MOCK_BRANCH_NAME,
         token: "mock-jwt-token-" + Date.now(),
+        refresh_token: "mock-refresh-token-" + Date.now(),
         token_expires_at: new Date(Date.now() + 86400000).toISOString(),
       };
     }
     throw new Error("Email et mot de passe requis");
   },
 
-  async logout(): Promise<void> {
+  async logout(_refreshToken?: string): Promise<void> {
     await delay(200);
   },
 
-  async refreshToken(_token: string): Promise<Partial<AuthUser>> {
+  async refreshToken(_refreshToken: string): Promise<{ access_token: string; refresh_token: string; expires_at: string }> {
     await delay(200);
-    return { token: "mock-refreshed-token-" + Date.now() };
+    return {
+      access_token: "mock-refreshed-token-" + Date.now(),
+      refresh_token: "mock-refreshed-refresh-" + Date.now(),
+      expires_at: new Date(Date.now() + 900000).toISOString(),
+    };
   },
 
   async callNextTicket(_counterId: string, serviceIds: string[]): Promise<Ticket> {
@@ -262,7 +278,10 @@ function extractErrorMessage(payload: unknown, fallback: string): string {
     if (typeof payload.detail === "string" && payload.detail.trim()) {
       return payload.detail;
     }
-    // FastAPI : { detail: "..." } ou { message: "..." }
+    // Contrat d'erreur standard : { success: false, error: { code, message } }
+    if (isRecord(payload.error) && typeof payload.error.message === "string") {
+      return payload.error.message;
+    }
     if (typeof payload.message === "string" && payload.message.trim()) {
       return payload.message;
     }
@@ -274,6 +293,9 @@ function extractErrorCode(payload: unknown): string | undefined {
   if (!isRecord(payload)) return undefined;
   if (isRecord(payload.detail) && typeof payload.detail.code === "string") {
     return payload.detail.code;
+  }
+  if (isRecord(payload.error) && typeof payload.error.code === "string") {
+    return payload.error.code;
   }
   return typeof payload.code === "string" ? payload.code : undefined;
 }
@@ -288,10 +310,20 @@ function unwrapEnvelope<T>(payload: unknown, status: number): T {
         extractErrorCode(payload)
       );
     }
-    return payload.data as T;
+    // Les réponses d'auth sont plates : { success, access_token, ... }
+    if ("data" in payload) {
+      return payload.data as T;
+    }
+    return payload as T;
   }
-  // Réponse brute (backend pas encore aligné sur l'enveloppe)
   return payload as T;
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
 }
 
 class ApiClient {
@@ -324,7 +356,7 @@ class ApiClient {
     const timeout = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
 
     try {
-      return await fetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
+      return await appFetch(`${API_BASE_URL}${API_PREFIX}${path}`, {
         method,
         headers: {
           "Content-Type": "application/json",
@@ -334,7 +366,7 @@ class ApiClient {
         signal: controller.signal,
       });
     } catch (err) {
-      if (err instanceof DOMException && err.name === "AbortError") {
+      if (isAbortError(err)) {
         throw new ApiError(
           "Le serveur TONDE ne répond pas (délai dépassé).",
           0,
@@ -409,6 +441,239 @@ class ApiClient {
 
 export const httpClient = new ApiClient();
 
+// ---- Contexte du poste (organisation / agence) ----
+
+export interface ApiContext {
+  orgId: string;
+  branchId: string;
+}
+
+const CONTEXT_STORAGE_KEY = "tonde-api-context";
+
+let apiContext: ApiContext | null = null;
+
+function readStoredContext(): ApiContext | null {
+  try {
+    const raw = localStorage.getItem(CONTEXT_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      isRecord(parsed) &&
+      typeof parsed.orgId === "string" &&
+      typeof parsed.branchId === "string" &&
+      parsed.orgId.trim() &&
+      parsed.branchId.trim()
+    ) {
+      return { orgId: parsed.orgId.trim(), branchId: parsed.branchId.trim() };
+    }
+  } catch {
+    // Valeur corrompue : ignorée, le poste redemandera sa configuration.
+  }
+  return null;
+}
+
+export function getApiContext(): ApiContext | null {
+  if (apiContext) return apiContext;
+  if (TONDE_ORG_ID && TONDE_BRANCH_ID) {
+    apiContext = { orgId: TONDE_ORG_ID, branchId: TONDE_BRANCH_ID };
+    return apiContext;
+  }
+  apiContext = readStoredContext();
+  return apiContext;
+}
+
+export function setApiContext(context: ApiContext | null): void {
+  apiContext = context;
+  try {
+    if (context) {
+      localStorage.setItem(CONTEXT_STORAGE_KEY, JSON.stringify(context));
+    } else {
+      localStorage.removeItem(CONTEXT_STORAGE_KEY);
+    }
+  } catch {
+    // localStorage indisponible : le contexte reste en mémoire.
+  }
+}
+
+export function hasApiContext(): boolean {
+  return getApiContext() !== null;
+}
+
+function requireApiContext(): ApiContext {
+  const context = getApiContext();
+  if (!context) {
+    throw new ApiError(
+      "Configuration du poste incomplète : renseignez l'organisation et l'agence.",
+      0,
+      "CONTEXT_REQUIRED"
+    );
+  }
+  return context;
+}
+
+// ---- Mapping backend → domaine desktop ----
+
+const ROLE_MAP: Record<string, EmployeeRole> = {
+  agent: "Agent",
+  supervisor: "Supervisor",
+  admin_agency: "BranchAdmin",
+  admin_org: "OrgAdmin",
+  super_admin: "OrgAdmin",
+};
+
+interface BackendAuthResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+  user: {
+    id: string;
+    name: string | null;
+    phone: string | null;
+    email: string | null;
+    role: string;
+    language: string;
+    is_verified: boolean;
+  };
+}
+
+interface BackendRefreshResponse {
+  access_token: string;
+  refresh_token: string;
+  token_type?: string;
+}
+
+interface Paginated<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+interface BackendCounter {
+  id: string;
+  org_id: string;
+  agency_id: string;
+  name: string;
+  description: string | null;
+  is_open: boolean;
+  is_active: boolean;
+  current_ticket_id: string | null;
+}
+
+interface BackendService {
+  id: string;
+  name: string;
+  ticket_prefix: string;
+  avg_duration_minutes: number;
+  is_active: boolean;
+  branch_id: string;
+}
+
+interface BackendDisplay {
+  branch: { id: string; name: string; is_open: boolean };
+  counters: Array<{ id: string; name: string; is_open: boolean; now_serving: string | null }>;
+  services: Array<{
+    id: string;
+    name: string;
+    ticket_prefix: string;
+    waiting: number;
+    estimated_wait_minutes: number | null;
+    last_called_number: string | null;
+  }>;
+  generated_at: string;
+}
+
+interface BackendCallNext {
+  success: boolean;
+  ticket_id?: string;
+  ticket_number?: string;
+  counter_name?: string;
+  message?: string;
+}
+
+interface BackendEmployee {
+  id: string;
+  org_id: string;
+  user_id: string;
+  agency_id: string | null;
+  counter_id: string | null;
+  role: string;
+  status: string;
+}
+
+function decodeJwtExpiry(token: string): string {
+  try {
+    const payload = token.split(".")[1];
+    if (!payload) return "";
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const parsed: unknown = JSON.parse(atob(padded));
+    if (isRecord(parsed) && typeof parsed.exp === "number") {
+      return new Date(parsed.exp * 1000).toISOString();
+    }
+  } catch {
+    // Jeton opaque (mock) ou payload illisible : expiration inconnue.
+  }
+  return "";
+}
+
+function counterNumber(name: string): number {
+  const match = name.match(/\d+/);
+  return match ? Number(match[0]) : 0;
+}
+
+function mapCounter(dto: BackendCounter): Counter {
+  return {
+    id: dto.id,
+    number: counterNumber(dto.name),
+    name: dto.name,
+    description: dto.description ?? undefined,
+    status: dto.is_open ? "OPEN" : "CLOSED",
+    // Le backend ne rattache pas de services à un guichet : toutes les
+    // files de l'agence sont candidates à l'appel.
+    service_ids: [],
+    branch_id: dto.agency_id,
+    is_active: dto.is_active,
+  };
+}
+
+function mapService(dto: BackendService): Service {
+  return {
+    id: dto.id,
+    name: dto.name,
+    code: dto.ticket_prefix,
+    branch_id: dto.branch_id,
+    is_active: dto.is_active,
+    avg_processing_minutes: dto.avg_duration_minutes,
+  };
+}
+
+function mapEmployee(dto: BackendEmployee): Employee {
+  return {
+    id: dto.user_id || dto.id,
+    name: "",
+    email: "",
+    role: ROLE_MAP[dto.role] ?? "Agent",
+    is_active: dto.status === "active",
+    branch_id: dto.agency_id ?? "",
+    counter_id: dto.counter_id ?? undefined,
+  };
+}
+
+const DEVICE_ID_KEY = "tonde-device-id";
+
+function getDeviceId(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const id = `desktop-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem(DEVICE_ID_KEY, id);
+    return id;
+  } catch {
+    return "tonde-desktop";
+  }
+}
+
 // ---- API Service ----
 
 // Export mock API pour les tests
@@ -417,138 +682,370 @@ export const mockApiService = mockApi;
 // Si VITE_USE_MOCK=true, on utilise le mock
 const apiImpl = IS_MOCK_MODE ? mockApi : null;
 
+/**
+ * Résout l'organisation et l'agence du poste après connexion.
+ * - Valeurs du build (VITE_TONDE_ORG_ID / VITE_TONDE_BRANCH_ID) ;
+ * - sinon valeurs déjà enregistrées sur le poste ;
+ * - sinon découverte automatique pour les rôles d'administration.
+ * Un agent ne peut pas lister son organisation : l'écran de sélection
+ * du guichet lui demande ces identifiants une seule fois.
+ */
+async function resolveContextAfterLogin(role: EmployeeRole): Promise<void> {
+  if (TONDE_ORG_ID && TONDE_BRANCH_ID) {
+    setApiContext({ orgId: TONDE_ORG_ID, branchId: TONDE_BRANCH_ID });
+    return;
+  }
+  if (getApiContext()) return;
+  if (role === "Agent" || role === "Supervisor") return;
+
+  try {
+    const organizations = await httpClient.get<Paginated<{ id: string }>>(
+      "/organizations?page_size=1"
+    );
+    const orgId = organizations.items?.[0]?.id;
+    if (!orgId) return;
+    const branches = await httpClient.get<Paginated<{ id: string }>>(
+      `/organizations/${orgId}/branches?page_size=1`
+    );
+    const branchId = branches.items?.[0]?.id;
+    if (!branchId) return;
+    setApiContext({ orgId, branchId });
+  } catch {
+    // Découverte impossible (rôle sans accès) : configuration manuelle.
+  }
+}
+
+async function fetchBranchDisplay(branchId: string): Promise<BackendDisplay> {
+  return httpClient.get<BackendDisplay>(`/branches/${branchId}/display`);
+}
+
+async function closeCounterRemote(counterId: string): Promise<void> {
+  const context = requireApiContext();
+  try {
+    await httpClient.post(
+      `/organizations/${context.orgId}/branches/${context.branchId}/counters/${counterId}/close`
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "COUNTER_ALREADY_CLOSED") return;
+    throw err;
+  }
+}
+
+async function openCounterRemote(counterId: string): Promise<void> {
+  const context = requireApiContext();
+  try {
+    await httpClient.post(
+      `/organizations/${context.orgId}/branches/${context.branchId}/counters/${counterId}/open`
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "COUNTER_ALREADY_OPEN") return;
+    throw err;
+  }
+}
+
 export const apiService = {
-  // Auth
+  // ---- Auth ----
+
   async login(credentials: LoginCredentials): Promise<AuthUser> {
     if (apiImpl) return apiImpl.login(credentials);
-    const data = await httpClient.post<AuthUser>("/auth/login", credentials);
-    httpClient.setToken(data.token);
-    return data;
+
+    const auth = await httpClient.post<BackendAuthResponse>("/auth/login", {
+      email: credentials.email,
+      password: credentials.password,
+      device_id: getDeviceId(),
+    });
+
+    const role = ROLE_MAP[auth.user.role];
+    if (!role) {
+      throw new ApiError(
+        "Ce compte n'a pas accès au poste guichet.",
+        403,
+        "ROLE_NOT_ALLOWED"
+      );
+    }
+
+    httpClient.setToken(auth.access_token);
+    await resolveContextAfterLogin(role);
+
+    const context = getApiContext();
+    let branchName = "";
+    if (context) {
+      try {
+        const display = await fetchBranchDisplay(context.branchId);
+        branchName = display.branch.name;
+      } catch {
+        // Nom d'agence cosmétique : jamais bloquant pour la connexion.
+      }
+    }
+
+    return {
+      id: auth.user.id,
+      name: auth.user.name ?? auth.user.email ?? "Agent",
+      email: auth.user.email ?? "",
+      role,
+      branch_id: context?.branchId ?? "",
+      branch_name: branchName,
+      token: auth.access_token,
+      refresh_token: auth.refresh_token,
+      token_expires_at: decodeJwtExpiry(auth.access_token),
+    };
   },
 
-  async logout(): Promise<void> {
-    if (apiImpl) return apiImpl.logout();
-    await httpClient.post("/auth/logout");
-    httpClient.clearToken();
+  async logout(refreshToken?: string): Promise<void> {
+    if (apiImpl) return apiImpl.logout(refreshToken);
+    try {
+      if (refreshToken) {
+        await httpClient.post("/auth/logout", { refresh_token: refreshToken });
+      }
+    } finally {
+      httpClient.clearToken();
+    }
   },
 
-  async refreshToken(token: string): Promise<Partial<AuthUser>> {
-    if (apiImpl) return apiImpl.refreshToken(token);
-    return httpClient.post("/auth/refresh", { token });
+  async refresh(
+    refreshToken: string
+  ): Promise<{ access_token: string; refresh_token: string; expires_at: string }> {
+    if (apiImpl) return apiImpl.refreshToken(refreshToken);
+    const data = await httpClient.post<BackendRefreshResponse>("/auth/refresh", {
+      refresh_token: refreshToken,
+    });
+    return {
+      access_token: data.access_token,
+      refresh_token: data.refresh_token,
+      expires_at: decodeJwtExpiry(data.access_token),
+    };
   },
 
-  // Tickets
+  // ---- Tickets ----
+
   async callNextTicket(counterId: string, serviceIds: string[]): Promise<Ticket> {
     if (apiImpl) return apiImpl.callNextTicket(counterId, serviceIds);
-    return httpClient.post<Ticket>(`/counters/${counterId}/call-next`, { service_ids: serviceIds });
+
+    const context = requireApiContext();
+    const display = await fetchBranchDisplay(context.branchId);
+    const candidates = display.services.filter(
+      (service) => serviceIds.length === 0 || serviceIds.includes(service.id)
+    );
+
+    if (candidates.length === 0) {
+      throw new ApiError(
+        "Aucun service actif pour cette agence.",
+        409,
+        "NO_SERVICE"
+      );
+    }
+
+    const target = [...candidates].sort((a, b) => b.waiting - a.waiting)[0];
+    if (target.waiting <= 0) {
+      throw new ApiError("Aucun ticket en attente", 409, "QUEUE_EMPTY");
+    }
+
+    const result = await httpClient.post<BackendCallNext>(
+      "/tickets/counter/call-next",
+      {
+        agency_id: context.branchId,
+        service_id: target.id,
+        counter_id: counterId,
+      }
+    );
+
+    if (!result?.ticket_id || !result.ticket_number) {
+      throw new ApiError(
+        result?.message ?? "Aucun ticket en attente",
+        409,
+        "QUEUE_EMPTY"
+      );
+    }
+
+    const now = new Date().toISOString();
+    return {
+      id: result.ticket_id,
+      number: result.ticket_number,
+      status: "CALLED",
+      priority: 0,
+      service_id: target.id,
+      branch_id: context.branchId,
+      created_at: now,
+      called_at: now,
+    };
   },
 
-  async callTicketById(ticketId: string, counterId: string): Promise<Ticket> {
-    if (apiImpl) return apiImpl.callTicketById(ticketId, counterId);
-    return httpClient.post<Ticket>(`/tickets/${ticketId}/call`, { counter_id: counterId });
+  async callTicketById(_ticketId: string, _counterId: string): Promise<Ticket> {
+    if (apiImpl) return apiImpl.callTicketById(_ticketId, _counterId);
+    // Le backend n'expose pas d'appel par identifiant : la file est
+    // toujours servie dans l'ordre (/tickets/counter/call-next).
+    throw new ApiError(
+      "L'appel d'un ticket précis n'est pas disponible hors ligne.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 
-  async recallTicket(ticketId: string, counterId: string): Promise<void> {
-    if (apiImpl) return apiImpl.recallTicket(ticketId, counterId);
-    await httpClient.post(`/tickets/${ticketId}/recall`, { counter_id: counterId });
+  async recallTicket(_ticketId: string, _counterId: string): Promise<void> {
+    if (apiImpl) return apiImpl.recallTicket(_ticketId, _counterId);
+    // Aucun endpoint /recall côté backend : l'action est masquée en mode réel.
+    throw new ApiError(
+      "Le rappel n'est pas disponible avec le backend actuel.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 
-  async markTicketAbsent(ticketId: string, counterId: string): Promise<void> {
-    if (apiImpl) return apiImpl.markTicketAbsent(ticketId, counterId);
-    await httpClient.post(`/tickets/${ticketId}/absent`, { counter_id: counterId });
+  async markTicketAbsent(ticketId: string, _counterId: string): Promise<void> {
+    if (apiImpl) return apiImpl.markTicketAbsent(ticketId, _counterId);
+    await httpClient.post(`/tickets/${ticketId}/absent`);
   },
 
-  async completeTicket(ticketId: string, counterId: string): Promise<void> {
-    if (apiImpl) return apiImpl.completeTicket(ticketId, counterId);
-    await httpClient.post(`/tickets/${ticketId}/complete`, { counter_id: counterId });
+  async completeTicket(ticketId: string, _counterId: string): Promise<void> {
+    if (apiImpl) return apiImpl.completeTicket(ticketId, _counterId);
+    // CALLED → SERVING → DONE. Si le ticket est déjà en service (rejeu
+    // après coupure réseau), on enchaîne directement sur /done.
+    try {
+      await httpClient.post(`/tickets/${ticketId}/serving`);
+    } catch (err) {
+      if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
+        throw err;
+      }
+    }
+    await httpClient.post(`/tickets/${ticketId}/done`);
   },
 
   async transferTicket(
     ticketId: string,
-    toCounterId: string,
+    _toCounterId: string,
     toServiceId: string
   ): Promise<void> {
-    if (apiImpl) return apiImpl.transferTicket(ticketId, toCounterId, toServiceId);
-    // Le contrat écosystème TONDE utilise `target_service_id` ; on
-    // conserve `to_service_id` pour le backend en cours d'alignement.
+    if (apiImpl) return apiImpl.transferTicket(ticketId, _toCounterId, toServiceId);
     await httpClient.post(`/tickets/${ticketId}/transfer`, {
       target_service_id: toServiceId,
-      to_service_id: toServiceId,
-      ...(toCounterId ? { to_counter_id: toCounterId } : {}),
     });
   },
 
-  // Counters
+  // ---- Counters ----
+
   async getCounter(counterId: string): Promise<Counter> {
     if (apiImpl) return apiImpl.getCounter(counterId);
-    return httpClient.get<Counter>(`/counters/${counterId}`);
+    const context = requireApiContext();
+    const dto = await httpClient.get<BackendCounter>(
+      `/organizations/${context.orgId}/branches/${context.branchId}/counters/${counterId}`
+    );
+    return mapCounter(dto);
   },
 
   async getCounters(branchId: string): Promise<Counter[]> {
     if (apiImpl) return apiImpl.getCounters(branchId);
-    return httpClient.get<Counter[]>(`/branches/${branchId}/counters`);
+    const context = requireApiContext();
+    const data = await httpClient.get<Paginated<BackendCounter>>(
+      `/organizations/${context.orgId}/branches/${branchId}/counters?page_size=100&active_only=true`
+    );
+    return (data.items ?? []).map(mapCounter);
   },
 
   async pauseCounter(counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.pauseCounter(counterId);
-    await httpClient.post(`/counters/${counterId}/pause`);
+    // Le backend ne connaît que ouvert/fermé : la pause ferme le guichet.
+    await closeCounterRemote(counterId);
   },
 
   async resumeCounter(counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.resumeCounter(counterId);
-    await httpClient.post(`/counters/${counterId}/resume`);
+    await openCounterRemote(counterId);
   },
 
   async closeCounter(counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.closeCounter(counterId);
-    await httpClient.post(`/counters/${counterId}/close`);
+    await closeCounterRemote(counterId);
   },
 
-  async openCounter(counterId: string, agentId: string): Promise<void> {
-    if (apiImpl) return apiImpl.openCounter(counterId, agentId);
-    await httpClient.post(`/counters/${counterId}/open`, { agent_id: agentId });
+  async openCounter(counterId: string, _agentId: string): Promise<void> {
+    if (apiImpl) return apiImpl.openCounter(counterId, _agentId);
+    await openCounterRemote(counterId);
   },
 
-  // Queues & Services
+  // ---- Queues & Services ----
+
+  async getBranchDisplay(branchId: string): Promise<BackendDisplay> {
+    return fetchBranchDisplay(branchId);
+  },
+
   async getQueues(branchId: string): Promise<Queue[]> {
     if (apiImpl) return apiImpl.getQueues(branchId);
-    return httpClient.get<Queue[]>(`/branches/${branchId}/queues`);
+    const display = await fetchBranchDisplay(branchId);
+    return (display.services ?? []).map((service) => ({
+      service_id: service.id,
+      service_name: service.name,
+      ticket_prefix: service.ticket_prefix,
+      waiting_count: service.waiting ?? 0,
+      called_count: service.last_called_number ? 1 : 0,
+      last_called_number: service.last_called_number ?? undefined,
+      estimated_wait_minutes: service.estimated_wait_minutes ?? undefined,
+      tickets: [],
+    }));
   },
 
   async getServices(branchId: string): Promise<Service[]> {
     if (apiImpl) return apiImpl.getServices(branchId);
-    return httpClient.get<Service[]>(`/branches/${branchId}/services`);
+    const data = await httpClient.get<BackendService[]>(
+      `/branches/${branchId}/services`
+    );
+    return (data ?? []).map(mapService);
   },
 
-  // Employees (Admin)
+  // ---- Employees (administration) ----
+
   async getEmployees(branchId: string): Promise<Employee[]> {
     if (apiImpl) return apiImpl.getEmployees(branchId);
-    return httpClient.get<Employee[]>(`/branches/${branchId}/employees`);
+    const context = requireApiContext();
+    const data = await httpClient.get<Paginated<BackendEmployee>>(
+      `/organizations/${context.orgId}/employees?agency_id=${encodeURIComponent(branchId)}&page_size=100`
+    );
+    return (data.items ?? []).map(mapEmployee);
   },
 
   async createEmployee(data: Partial<Employee>): Promise<Employee> {
     if (apiImpl) return apiImpl.createEmployee(data);
-    return httpClient.post<Employee>("/employees", data);
+    throw new ApiError(
+      "La création d'employé se fait depuis le back-office TONDE.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 
   async updateEmployee(id: string, data: Partial<Employee>): Promise<Employee> {
     if (apiImpl) return apiImpl.updateEmployee(id, data);
-    return httpClient.put<Employee>(`/employees/${id}`, data);
+    throw new ApiError(
+      "La modification d'employé se fait depuis le back-office TONDE.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 
   async deactivateEmployee(id: string): Promise<void> {
     if (apiImpl) return apiImpl.deactivateEmployee(id);
-    await httpClient.patch(`/employees/${id}`, { is_active: false });
+    throw new ApiError(
+      "La désactivation d'employé se fait depuis le back-office TONDE.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 
-  // Stats
+  // ---- Stats ----
+
   async getAgentStats(agentId: string, date: string): Promise<AgentStats> {
     if (apiImpl) return apiImpl.getAgentStats(agentId, date);
-    return httpClient.get<AgentStats>(`/agents/${agentId}/stats?date=${date}`);
+    throw new ApiError(
+      "Les statistiques agent ne sont pas exposées par ce backend.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 
   async getBranchStats(branchId: string, date: string): Promise<unknown> {
     if (apiImpl) return apiImpl.getBranchStats(branchId, date);
-    return httpClient.get(`/branches/${branchId}/stats?date=${date}`);
+    throw new ApiError(
+      "Les statistiques d'agence ne sont pas exposées par ce backend.",
+      501,
+      "NOT_SUPPORTED"
+    );
   },
 };

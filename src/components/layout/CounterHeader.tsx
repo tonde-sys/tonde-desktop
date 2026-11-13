@@ -33,9 +33,16 @@ export function CounterHeader({ onPause, onLogout }: CounterHeaderProps) {
     <header className="flex items-center justify-between px-6 py-3 bg-ink border-b border-border-subtle">
       {/* Gauche : branding + guichet */}
       <div className="flex items-center gap-4">
-        <span className="font-mono font-bold text-violet text-lg tracking-widest">
-          TONDE
-        </span>
+        <div className="flex items-center gap-2.5">
+          <img
+            src="/logo/tonde-logo.png"
+            alt={t("app.name")}
+            className="w-8 h-8 rounded-lg"
+          />
+          <span className="font-mono font-bold text-violet text-lg tracking-widest">
+            TONDE
+          </span>
+        </div>
         {myCounter && (
           <>
             <span className="text-border-strong">|</span>

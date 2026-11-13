@@ -17,6 +17,11 @@ import { AgentDashboard } from "./pages/AgentDashboard";
 function BootScreen() {
   return (
     <div className="h-screen bg-midnight flex flex-col items-center justify-center gap-6">
+      <img
+        src="/logo/tonde-logo.png"
+        alt="TONDE"
+        className="w-24 h-24 rounded-3xl shadow-[0_0_50px_rgba(108,71,255,0.35)]"
+      />
       <span className="font-mono font-bold text-4xl text-violet tracking-widest">
         TONDE
       </span>

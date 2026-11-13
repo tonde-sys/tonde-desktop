@@ -47,6 +47,47 @@ describe("httpClient", () => {
     await expect(httpClient.get("/tickets/ticket-1")).resolves.toEqual({ id: "ticket-1" });
   });
 
+  it("retourne telles quelles les réponses d'auth plates (sans data)", async () => {
+    fetchMock.mockResolvedValue(
+      mockResponse({
+        success: true,
+        access_token: "access-abc",
+        refresh_token: "refresh-abc",
+        token_type: "bearer",
+        user: { id: "user-1", role: "agent" },
+      })
+    );
+
+    const auth = await httpClient.post<{ access_token: string; user: { id: string } }>(
+      "/auth/login",
+      {}
+    );
+
+    expect(auth.access_token).toBe("access-abc");
+    expect(auth.user.id).toBe("user-1");
+  });
+
+  it("rejette une erreur { success:false, error:{ code, message } }", async () => {
+    fetchMock.mockResolvedValue(
+      mockResponse(
+        {
+          success: false,
+          error: { code: "QUEUE_EMPTY", message: "Aucun ticket en attente" },
+        },
+        409
+      )
+    );
+
+    const error = await httpClient
+      .post("/tickets/counter/call-next", {})
+      .catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(409);
+    expect((error as ApiError).code).toBe("QUEUE_EMPTY");
+    expect((error as ApiError).message).toBe("Aucun ticket en attente");
+  });
+
   it("rejette une enveloppe success:false avec code et message", async () => {
     fetchMock.mockResolvedValue(
       mockResponse(

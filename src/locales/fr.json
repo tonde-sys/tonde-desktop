@@ -10,6 +10,9 @@
     "password": "Mot de passe",
     "loginButton": "Se connecter",
     "loggingIn": "Connexion...",
+    "server": "Serveur : {{host}}",
+    "coldStart": "Premier appel : le réveil du serveur peut prendre ~30 s",
+    "mockServer": "Mode démo local — API simulée",
     "errors": {
       "invalidCredentials": "Email ou mot de passe incorrect",
       "networkError": "Impossible de joindre le serveur"
@@ -17,6 +20,8 @@
   },
   "counter": {
     "select": "Choisir mon guichet",
+    "hello": "Bonjour {{name}}, sélectionnez votre poste",
+    "none": "Aucun guichet disponible pour cette agence",
     "open": "Ouvrir le guichet",
     "close": "Fermer le guichet",
     "pause": "Mettre en pause",
@@ -25,6 +30,15 @@
       "open": "Ouvert",
       "paused": "En pause",
       "closed": "Fermé"
+    },
+    "setup": {
+      "title": "Configurer le poste",
+      "description": "Renseignez l'organisation et l'agence à laquelle ce poste est rattaché",
+      "hint": "Ces identifiants sont fournis par votre administrateur TONDE",
+      "orgId": "Identifiant de l'organisation",
+      "branchId": "Identifiant de l'agence",
+      "save": "Enregistrer",
+      "invalid": "Les deux identifiants sont requis"
     }
   },
   "ticket": {
@@ -67,6 +81,7 @@
   "shortcuts": {
     "title": "Raccourcis clavier",
     "callNext": "Appeler le suivant",
+    "complete": "Terminer le ticket",
     "markAbsent": "Marquer absent",
     "transfer": "Transférer",
     "pause": "Pause / Reprendre",

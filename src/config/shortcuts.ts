@@ -23,6 +23,12 @@ export const SHORTCUTS = {
     description: "Appeler le prochain ticket (alt)",
     tauri: "F1",
   },
+  COMPLETE: {
+    key: "Enter",
+    label: "Entrée",
+    description: "Terminer le ticket en cours",
+    tauri: "Enter",
+  },
   MARK_ABSENT: {
     key: "a",
     label: "A",

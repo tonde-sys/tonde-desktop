@@ -16,6 +16,7 @@ import { useQueueStore } from "../store/queueStore";
 import { useAuthStore } from "../store/authStore";
 import { useAgentShortcuts } from "../hooks/useKeyboardShortcuts";
 import { wsManager } from "../lib/WebSocketManager";
+import { IS_MOCK_MODE } from "../config/api";
 import { preloadSounds } from "../utils/sound";
 import { formatTicketNumber } from "../utils/formatters";
 import {
@@ -61,13 +62,13 @@ export function AgentDashboard() {
     }
   }, [user?.branch_id, loadQueues]);
 
-  // Connexion WebSocket
+  // Connexion WebSocket du guichet + polling de la file
   useEffect(() => {
-    if (user?.token && user?.branch_id) {
-      wsManager.connect(user.branch_id, user.token);
+    if (user?.token && myCounter?.id && user.branch_id) {
+      wsManager.connect(myCounter.id, user.token, user.branch_id);
     }
     return () => wsManager.disconnect();
-  }, [user?.token, user?.branch_id]);
+  }, [user?.token, user?.branch_id, myCounter?.id]);
 
   // Raccourcis clavier
   useAgentShortcuts({
@@ -77,9 +78,12 @@ export function AgentDashboard() {
   });
 
   const serviceIds = myCounter?.service_ids ?? [];
-  const relevantQueues = queues.filter((q) =>
-    serviceIds.includes(q.service_id)
-  );
+  // Backend réel : aucun service n'est rattaché au guichet, toutes les
+  // files de l'agence sont donc candidates à l'appel.
+  const relevantQueues =
+    serviceIds.length > 0
+      ? queues.filter((q) => serviceIds.includes(q.service_id))
+      : queues;
   const totalWaiting = relevantQueues.reduce(
     (sum, q) => sum + q.waiting_count,
     0
@@ -144,6 +148,7 @@ export function AgentDashboard() {
                 >
                   <CheckSquare size={16} />
                   {t("ticket.complete")}
+                  <span className="kbd kbd-inverse">{t("common.enter")}</span>
                 </button>
                 <button
                   onClick={handleMarkAbsent}
@@ -152,7 +157,7 @@ export function AgentDashboard() {
                 >
                   <UserX size={16} />
                   {t("ticket.markAbsent")}
-                  <span className="kbd">A</span>
+                  <span className="kbd kbd-inverse">A</span>
                 </button>
                 <button
                   onClick={() => openTransferModal()}
@@ -167,6 +172,7 @@ export function AgentDashboard() {
                   onClick={handleRecall}
                   disabled={isLoading}
                   className="btn-ghost flex items-center gap-2"
+                  hidden={!IS_MOCK_MODE}
                 >
                   <RotateCcw size={14} />
                   {t("ticket.recall")}
@@ -203,7 +209,7 @@ export function AgentDashboard() {
                   <Phone size={20} />
                 )}
                 {t("ticket.callNext")}
-                <span className="kbd text-white/70">Espace</span>
+                <span className="kbd kbd-inverse">Espace</span>
               </button>
             </>
           )}
@@ -220,13 +226,38 @@ export function AgentDashboard() {
             </p>
           </div>
 
-          {/* Liste tickets en attente */}
+          {/* Liste des files — tickets nominatifs en mode mock,
+              synthèse par service avec le backend réel */}
           <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2">
-            {relevantQueues
-              .flatMap((q) => q.tickets)
-              .filter((t) => t.status === "WAITING")
-              .slice(0, 15)
-              .map((ticket, i) => (
+            {relevantQueues.map((queue) => {
+              const waitingTickets = queue.tickets.filter(
+                (t) => t.status === "WAITING"
+              );
+
+              if (waitingTickets.length === 0) {
+                return (
+                  <div
+                    key={queue.service_id}
+                    className="card-secondary flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-text-primary text-sm font-medium truncate">
+                        {queue.service_name}
+                      </span>
+                      {queue.ticket_prefix && (
+                        <span className="text-text-muted text-xs font-mono">
+                          {queue.ticket_prefix}
+                        </span>
+                      )}
+                    </div>
+                    <span className="font-mono font-semibold text-cyan text-sm">
+                      {queue.waiting_count}
+                    </span>
+                  </div>
+                );
+              }
+
+              return waitingTickets.slice(0, 15).map((ticket, i) => (
                 <div
                   key={ticket.id}
                   className="card-secondary flex items-center justify-between"
@@ -245,7 +276,8 @@ export function AgentDashboard() {
                     </span>
                   )}
                 </div>
-              ))}
+              ));
+            })}
 
             {totalWaiting === 0 && (
               <div className="flex items-center justify-center h-full">

@@ -10,6 +10,9 @@
     "password": "Password",
     "loginButton": "Sign in",
     "loggingIn": "Signing in...",
+    "server": "Server: {{host}}",
+    "coldStart": "First call: the server may take ~30 s to wake up",
+    "mockServer": "Local demo mode — simulated API",
     "errors": {
       "invalidCredentials": "Invalid email or password",
       "networkError": "Cannot reach the server"
@@ -17,6 +20,8 @@
   },
   "counter": {
     "select": "Select my counter",
+    "hello": "Hello {{name}}, select your counter",
+    "none": "No counter available for this branch",
     "open": "Open counter",
     "close": "Close counter",
     "pause": "Pause",
@@ -25,6 +30,15 @@
       "open": "Open",
       "paused": "Paused",
       "closed": "Closed"
+    },
+    "setup": {
+      "title": "Set up this device",
+      "description": "Enter the organization and branch this device belongs to",
+      "hint": "These identifiers are provided by your TONDE administrator",
+      "orgId": "Organization ID",
+      "branchId": "Branch ID",
+      "save": "Save",
+      "invalid": "Both identifiers are required"
     }
   },
   "ticket": {
@@ -67,6 +81,7 @@
   "shortcuts": {
     "title": "Keyboard shortcuts",
     "callNext": "Call next ticket",
+    "complete": "Complete ticket",
     "markAbsent": "Mark absent",
     "transfer": "Transfer ticket",
     "pause": "Pause / Resume",

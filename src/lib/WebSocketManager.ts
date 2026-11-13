@@ -1,6 +1,8 @@
 // ============================================================
 // TONDE DESKTOP — WebSocket Manager
-// Reconnection exponentielle + Fallback Polling
+// Guichet : canal /tickets/ws/counter/{id} (keepalive)
+// Le backend ne pousse pas les événements métier aux guichets :
+// la file est rafraîchie par polling tant que la session est ouverte.
 // ============================================================
 
 import type {
@@ -9,7 +11,7 @@ import type {
   QueueUpdatePayload,
   CounterStatusPayload,
 } from "../types";
-import { IS_MOCK_MODE, WS_BASE_URL } from "../config/api";
+import { API_PREFIX, IS_MOCK_MODE, WS_BASE_URL } from "../config/api";
 import { useOfflineStore } from "../store/offlineStore";
 import { useQueueStore } from "../store/queueStore";
 import { useCounterStore } from "../store/counterStore";
@@ -19,10 +21,15 @@ type EventHandler<T = unknown> = (payload: T) => void;
 const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
-const POLL_INTERVAL_MS = 5000;
+const POLL_INTERVAL_MS = 7000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 class WebSocketManager {
   private ws: WebSocket | null = null;
+  private counterId: string | null = null;
   private branchId: string | null = null;
   private token: string | null = null;
   private retryCount = 0;
@@ -34,7 +41,7 @@ class WebSocketManager {
 
   // ---- Public API ----
 
-  connect(branchId: string, token: string): void {
+  connect(counterId: string, token: string, branchId: string): void {
     // Pas de backend temps réel derrière l'API mock.
     if (IS_MOCK_MODE) {
       useOfflineStore.getState().setOnline(true);
@@ -44,21 +51,26 @@ class WebSocketManager {
 
     const alreadyConnected =
       this.ws !== null &&
-      this.branchId === branchId &&
+      this.counterId === counterId &&
       this.token === token &&
       (this.ws.readyState === WebSocket.OPEN ||
         this.ws.readyState === WebSocket.CONNECTING);
-    if (alreadyConnected) return;
+    if (alreadyConnected && this.branchId === branchId) return;
 
     this.isIntentionallyClosed = true;
     this._clearTimers();
     this.ws?.close(1000, "Reconnect");
     this.ws = null;
 
+    this.counterId = counterId;
     this.branchId = branchId;
     this.token = token;
     this.isIntentionallyClosed = false;
     this.retryCount = 0;
+
+    // Le canal guichet ne reçoit que le keepalive : la file est
+    // rafraîchie par polling, même WebSocket connecté.
+    this._startPolling();
     this._connect();
   }
 
@@ -67,6 +79,9 @@ class WebSocketManager {
     this._clearTimers();
     this.ws?.close(1000, "User disconnect");
     this.ws = null;
+    this.counterId = null;
+    this.branchId = null;
+    this.token = null;
     useOfflineStore.getState().setConnectionStatus("DISCONNECTED");
   }
 
@@ -75,7 +90,6 @@ class WebSocketManager {
       this.handlers.set(event, new Set());
     }
     this.handlers.get(event)!.add(handler as EventHandler);
-    // Return unsubscribe function
     return () => this.handlers.get(event)?.delete(handler as EventHandler);
   }
 
@@ -88,11 +102,13 @@ class WebSocketManager {
   // ---- Internal ----
 
   private _connect(): void {
-    if (!this.branchId || !this.token) return;
+    if (!this.counterId || !this.token) return;
 
     useOfflineStore.getState().setConnectionStatus("RECONNECTING");
 
-    const url = `${WS_BASE_URL}/${encodeURIComponent(this.branchId)}?token=${encodeURIComponent(this.token)}`;
+    const url =
+      `${WS_BASE_URL}${API_PREFIX}/tickets/ws/counter/` +
+      `${encodeURIComponent(this.counterId)}?token=${encodeURIComponent(this.token)}`;
 
     try {
       this.ws = new WebSocket(url);
@@ -103,16 +119,16 @@ class WebSocketManager {
 
     this.ws.onopen = () => {
       this.retryCount = 0;
-      this._stopPolling();
       useOfflineStore.getState().setOnline(true);
       useOfflineStore.getState().setConnectionStatus("CONNECTED");
       this._startPing();
+      void this._poll();
     };
 
     this.ws.onmessage = (event) => {
       try {
-        const msg = JSON.parse(event.data) as WebSocketEvent;
-        this._dispatch(msg);
+        const msg: unknown = JSON.parse(event.data);
+        this._handleMessage(msg);
       } catch (e) {
         console.error("[WS] Failed to parse message", e);
       }
@@ -126,9 +142,6 @@ class WebSocketManager {
       // on signale une reconnexion, pas une perte réseau globale.
       useOfflineStore.getState().setConnectionStatus("RECONNECTING");
 
-      // Start polling fallback
-      this._startPolling();
-
       if (event.code !== 1000) {
         this._scheduleReconnect();
       }
@@ -137,6 +150,31 @@ class WebSocketManager {
     this.ws.onerror = () => {
       // onclose will fire after onerror — nothing extra needed
     };
+  }
+
+  private _handleMessage(msg: unknown): void {
+    if (!isRecord(msg) || typeof msg.type !== "string") return;
+    const rawType = msg.type;
+
+    if (rawType === "connected") {
+      useOfflineStore.getState().setConnectionStatus("CONNECTED");
+      return;
+    }
+    if (rawType === "pong") return;
+
+    const type = rawType.toUpperCase() as WebSocketEventType;
+    const payload = isRecord(msg.payload)
+      ? msg.payload
+      : isRecord(msg.data)
+        ? msg.data
+        : msg;
+
+    this._dispatch({
+      type,
+      payload,
+      branch_id: this.branchId ?? "",
+      timestamp: new Date().toISOString(),
+    });
   }
 
   private _dispatch(event: WebSocketEvent): void {
@@ -165,7 +203,6 @@ class WebSocketManager {
       return;
     }
 
-    // Exponential backoff with jitter
     const delay = Math.min(
       BASE_DELAY_MS * Math.pow(2, this.retryCount) + Math.random() * 1000,
       MAX_DELAY_MS
@@ -180,9 +217,10 @@ class WebSocketManager {
   }
 
   private _startPing(): void {
+    this._stopPing();
     this.pingInterval = setInterval(() => {
       if (this.ws?.readyState === WebSocket.OPEN) {
-        this.ws.send(JSON.stringify({ type: "PING" }));
+        this.ws.send("ping");
       }
     }, 25000); // Every 25 seconds
   }
@@ -194,12 +232,14 @@ class WebSocketManager {
     }
   }
 
-  // ---- Polling fallback when WS is down ----
+  // ---- Polling de la file (le backend ne pousse rien aux guichets) ----
 
   private _startPolling(): void {
-    if (this.pollInterval) return;
-    console.info("[WS] Switching to polling fallback");
-    this.pollInterval = setInterval(() => this._poll(), POLL_INTERVAL_MS);
+    this._stopPolling();
+    console.info("[WS] Queue polling enabled");
+    this.pollInterval = setInterval(() => {
+      void this._poll();
+    }, POLL_INTERVAL_MS);
   }
 
   private _stopPolling(): void {
@@ -221,6 +261,7 @@ class WebSocketManager {
 
   private _clearTimers(): void {
     if (this.retryTimeout) clearTimeout(this.retryTimeout);
+    this.retryTimeout = null;
     this._stopPolling();
     this._stopPing();
   }

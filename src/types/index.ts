@@ -37,11 +37,13 @@ export interface Counter {
   id: string;
   number: number;
   name: string;
+  description?: string;
   status: CounterStatus;
   service_ids: string[];
   agent_id?: string;
   agent_name?: string;
   branch_id: string;
+  is_active?: boolean;
   current_ticket?: Ticket;
 }
 
@@ -89,8 +91,11 @@ export interface Branch {
 export interface Queue {
   service_id: string;
   service_name: string;
+  ticket_prefix?: string;
   waiting_count: number;
   called_count: number;
+  last_called_number?: string;
+  estimated_wait_minutes?: number;
   tickets: Ticket[];
 }
 
@@ -183,6 +188,7 @@ export interface AuthUser {
   branch_name: string;
   counter_id?: string;
   token: string;
+  refresh_token?: string;
   token_expires_at: string;
 }
 

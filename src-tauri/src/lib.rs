@@ -19,6 +19,8 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
+        // Requêtes HTTP natives (pas de CORS WebView vers l'API Render)
+        .plugin(tauri_plugin_http::init())
         // ── Cache SQLite (offline-first) ──
         .setup(|app| {
             let connection = match app.path().app_data_dir() {

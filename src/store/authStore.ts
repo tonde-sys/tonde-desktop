@@ -7,7 +7,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import type { AuthUser, LoginCredentials, EmployeeRole } from "../types";
-import { apiService, ApiError, httpClient } from "../services/api/apiService";
+import {
+  apiService,
+  ApiError,
+  getApiContext,
+  httpClient,
+  setApiContext,
+} from "../services/api/apiService";
 import { db } from "../services/database/db";
 import { tokenStorage } from "../services/secure/tokenStorage";
 import { wsManager } from "../lib/WebSocketManager";
@@ -33,6 +39,7 @@ interface AuthState {
   login: (credentials: LoginCredentials) => Promise<void>;
   logout: (options?: LogoutOptions) => Promise<void>;
   refreshToken: () => Promise<void>;
+  applyContext: (orgId: string, branchId: string) => void;
   clearError: () => void;
 
   // Helpers
@@ -53,11 +60,17 @@ function isTokenExpired(expiresAt?: string): boolean {
 
 function friendlyLoginError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.status === 401 || err.status === 403) {
+    if (err.status === 401) {
       return "Email ou mot de passe incorrect.";
+    }
+    if (err.status === 403) {
+      return err.message;
     }
     if (err.status >= 500) {
       return "Le serveur TONDE est momentanément indisponible.";
+    }
+    if (err.status === 0) {
+      return "Serveur TONDE injoignable. Sur Render, le réveil du service peut prendre jusqu'à 30 secondes.";
     }
     return err.message;
   }
@@ -91,13 +104,19 @@ export const useAuthStore = create<AuthState>()(
         );
 
         try {
-          const token = await tokenStorage.get().catch(() => null);
+          const bundle = await tokenStorage.getBundle().catch(() => null);
           const persistedUser = get().user;
 
-          if (token && persistedUser) {
-            httpClient.setToken(token);
+          if (bundle?.accessToken && persistedUser) {
+            const context = getApiContext();
+            httpClient.setToken(bundle.accessToken);
             set({
-              user: { ...persistedUser, token },
+              user: {
+                ...persistedUser,
+                token: bundle.accessToken,
+                refresh_token: bundle.refreshToken,
+                branch_id: persistedUser.branch_id || context?.branchId || "",
+              },
               isAuthenticated: true,
             });
 
@@ -110,7 +129,7 @@ export const useAuthStore = create<AuthState>()(
               }
             }
           } else {
-            if (token) {
+            if (bundle?.accessToken) {
               await tokenStorage.clear().catch(() => undefined);
             }
             httpClient.clearToken();
@@ -129,9 +148,13 @@ export const useAuthStore = create<AuthState>()(
           // Écriture de cache hors du chemin critique : le login réussit
           // même si le coffre ou SQLite est indisponible.
           try {
-            await tokenStorage.set(user.token);
+            await tokenStorage.setBundle({
+              accessToken: user.token,
+              refreshToken: user.refresh_token,
+              expiresAt: user.token_expires_at,
+            });
           } catch (err) {
-            console.warn("[TONDE] Jeton non persisté sur ce poste", err);
+            console.warn("[TONDE] Jetons non persistés sur ce poste", err);
           }
           void db.upsertEmployee({
             id: user.id,
@@ -160,8 +183,9 @@ export const useAuthStore = create<AuthState>()(
 
       logout: async (options) => {
         if (options?.remote !== false) {
+          const bundle = await tokenStorage.getBundle().catch(() => null);
           try {
-            await apiService.logout();
+            await apiService.logout(bundle?.refreshToken);
           } catch {
             // Déconnexion locale garantie même si le réseau échoue
           }
@@ -186,15 +210,38 @@ export const useAuthStore = create<AuthState>()(
         const { user } = get();
         if (!user) throw new Error("Session absente");
 
-        const currentToken = await tokenStorage.get();
-        if (!currentToken) throw new Error("Jeton d'accès introuvable");
+        const bundle = await tokenStorage.getBundle();
+        if (!bundle?.refreshToken) {
+          throw new Error("Session expirée : reconnectez-vous.");
+        }
 
-        const refreshed = await apiService.refreshToken(currentToken);
-        const token = refreshed.token ?? currentToken;
+        const refreshed = await apiService.refresh(bundle.refreshToken);
+        const refreshToken = refreshed.refresh_token || bundle.refreshToken;
 
-        await tokenStorage.set(token).catch(() => undefined);
-        httpClient.setToken(token);
-        set({ user: { ...user, ...refreshed, token } });
+        await tokenStorage
+          .setBundle({
+            accessToken: refreshed.access_token,
+            refreshToken,
+            expiresAt: refreshed.expires_at,
+          })
+          .catch(() => undefined);
+        httpClient.setToken(refreshed.access_token);
+        set({
+          user: {
+            ...user,
+            token: refreshed.access_token,
+            refresh_token: refreshToken,
+            token_expires_at: refreshed.expires_at || user.token_expires_at,
+          },
+        });
+      },
+
+      applyContext: (orgId, branchId) => {
+        setApiContext({ orgId, branchId });
+        const { user } = get();
+        if (user) {
+          set({ user: { ...user, branch_id: branchId } });
+        }
       },
 
       clearError: () => set({ error: null }),
@@ -217,8 +264,10 @@ export const useAuthStore = create<AuthState>()(
         version < 2
           ? ({ user: null, isAuthenticated: false } as AuthState)
           : (persistedState as AuthState),
-      partialize: (state) => ({
-        user: state.user ? { ...state.user, token: "" } : null,
+      partialize: (state): Partial<AuthState> => ({
+        user: state.user
+          ? { ...state.user, token: "", refresh_token: undefined }
+          : null,
         isAuthenticated: state.isAuthenticated,
       }),
     }

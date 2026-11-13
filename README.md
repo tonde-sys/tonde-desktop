@@ -57,10 +57,38 @@ exposées au frontend : **ne jamais y mettre de secret**.
 | Variable | Défaut | Rôle |
 |----------|--------|------|
 | `VITE_ENV` | `development` | `development` \| `staging` \| `production` |
-| `VITE_API_URL` | `http://localhost:8000` | Base du backend FastAPI |
-| `VITE_WS_URL` | `ws://localhost:8000/ws` | Base WebSocket temps réel |
+| `VITE_API_URL` | localhost en dev, Render en staging/prod | Base du backend FastAPI |
+| `VITE_WS_URL` | dérivé de `VITE_API_URL` (`http`→`ws`) | Base WebSocket temps réel |
 | `VITE_API_PREFIX` | `/api/v1` | Préfixe REST (vide si le backend sert la racine) |
+| `VITE_TONDE_ORG_ID` | — | Organisation du poste (multi-tenant) |
+| `VITE_TONDE_BRANCH_ID` | — | Agence du poste (multi-tenant) |
 | `VITE_USE_MOCK` | `false` | Active l'API mock locale en DEV uniquement |
+
+---
+
+## Connexion au backend Render
+
+L'API pilote est déployée sur Render :
+`https://tonde-api-pilot-fx1j.onrender.com` (préfixe `/api/v1`). Un build
+`staging` ou `production` l'utilise par défaut, sans configuration.
+
+- **Cold start** : le plan gratuit endort le service après 15 min d'inactivité.
+  Le premier appel peut prendre jusqu'à ~30 s ; le client attend 30 s et affiche
+  un message explicite en cas de dépassement.
+- **CORS** : la WebView Tauri n'est pas une origine autorisée par le backend.
+  Les requêtes passent donc par `@tauri-apps/plugin-http` (client natif Rust,
+  hors CORS), avec repli sur `fetch` dans un navigateur. Les hôtes autorisés
+  sont déclarés dans [src-tauri/capabilities/default.json](src-tauri/capabilities/default.json).
+- **Contexte du poste** : le JWT agent ne contient pas l'organisation. Renseigner
+  `VITE_TONDE_ORG_ID` / `VITE_TONDE_BRANCH_ID` au build, ou saisir ces deux
+  identifiants une seule fois sur l'écran de sélection du guichet (mémorisés sur
+  le poste). Les rôles d'administration les découvrent automatiquement.
+- **Limites du contrat actuel** :
+  - pas d'endpoint de rappel (`R` est masqué hors mode mock) ;
+  - les guichets ne connaissent que ouvert/fermé : « pause » ferme le guichet ;
+  - la file n'expose pas les tickets un par un : l'appel se fait via
+    `/tickets/counter/call-next`, le service le plus chargé étant choisi ;
+  - l'appel par identifiant de ticket n'existe pas hors ligne (501 explicite).
 
 ---
 
@@ -113,10 +141,12 @@ le coffre OS. Dans un navigateur (dev), elle bascule sur des fallbacks mémoire 
 
 ### Sécurité du token
 
-- Token stocké via le **Gestionnaire d'identifiants Windows** (crate `keyring`),
-  avec fallback chiffré par le plugin store si le coffre est indisponible.
-- Le token n'est **jamais** persisté dans le state Zustand ni dans `localStorage`.
-- Refresh automatique sur 401 (une seule tentative, hors routes `/auth/*`).
+- Paire **access + refresh token** stockée via le **Gestionnaire d'identifiants
+  Windows** (crate `keyring`), avec fallback chiffré par le plugin store si le
+  coffre est indisponible.
+- Aucun jeton n'est **jamais** persisté dans le state Zustand ni dans `localStorage`.
+- Refresh automatique sur 401 (une seule tentative, hors routes `/auth/*`),
+  rotation du refresh token à chaque renouvellement.
 
 ---
 
@@ -125,10 +155,11 @@ le coffre OS. Dans un navigateur (dev), elle bascule sur des fallbacks mémoire 
 | Touche | Action |
 |--------|--------|
 | `Espace` / `F1` | Appeler le ticket suivant |
+| `Entrée` | Terminer le ticket en cours |
 | `A` / `F2` | Marquer le client absent |
 | `T` / `F3` | Transférer le ticket |
 | `P` / `F4` | Pause / reprendre le guichet |
-| `R` | Rappeler le ticket en cours |
+| `R` | Rappeler le ticket en cours (mode démo uniquement) |
 | `F12` | Aide des raccourcis |
 | `Ctrl+L` | Se déconnecter |
 | `Échap` | Fermer le dialogue / annuler |

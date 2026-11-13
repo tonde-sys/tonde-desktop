@@ -9,6 +9,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../store/authStore";
+import { API_HOST, IS_MOCK_MODE } from "../config/api";
 import { Eye, EyeOff, LogIn } from "lucide-react";
 
 const loginSchema = z.object({
@@ -40,6 +41,11 @@ export function LoginPage() {
     <div className="h-screen bg-midnight flex flex-col items-center justify-center p-6">
       {/* Logo */}
       <div className="mb-10 text-center">
+        <img
+          src="/logo/tonde-logo.png"
+          alt={t("app.name")}
+          className="w-28 h-28 rounded-[28px] mx-auto mb-4 shadow-[0_0_60px_rgba(108,71,255,0.35)]"
+        />
         <h1 className="font-mono font-bold text-5xl text-violet tracking-widest mb-2">
           TONDE
         </h1>
@@ -128,8 +134,18 @@ export function LoginPage() {
         </form>
       </div>
 
-      {/* Version */}
-      <p className="mt-8 text-text-muted text-xs">v0.1.0</p>
+      {/* Version + serveur */}
+      <p className="mt-8 text-text-muted text-xs text-center">
+        v0.1.0
+        <span className="block mt-1">
+          {IS_MOCK_MODE
+            ? t("auth.mockServer")
+            : t("auth.server", { host: API_HOST })}
+        </span>
+        {!IS_MOCK_MODE && (
+          <span className="block mt-0.5">{t("auth.coldStart")}</span>
+        )}
+      </p>
     </div>
   );
 }
