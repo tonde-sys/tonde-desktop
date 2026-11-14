@@ -549,19 +549,32 @@ const ROLE_MAP: Record<string, EmployeeRole> = {
   super_admin: "OrgAdmin",
 };
 
+interface BackendMembership {
+  employee_id: string;
+  org_id: string;
+  branch_id: string | null;
+  counter_id: string | null;
+  role: string;
+  status: string;
+}
+
+interface BackendAuthUser {
+  id: string;
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  role: string;
+  language: string;
+  is_verified: boolean;
+  org_id?: string | null;
+  memberships?: BackendMembership[];
+}
+
 interface BackendAuthResponse {
   access_token: string;
   refresh_token: string;
   token_type?: string;
-  user: {
-    id: string;
-    name: string | null;
-    phone: string | null;
-    email: string | null;
-    role: string;
-    language: string;
-    is_verified: boolean;
-  };
+  user: BackendAuthUser;
 }
 
 interface BackendRefreshResponse {
@@ -597,6 +610,9 @@ interface BackendTicket {
   service_id: string;
   created_at: string;
   counter_name: string | null;
+  called_at?: string | null;
+  served_at?: string | null;
+  done_at?: string | null;
 }
 
 interface BackendService {
@@ -707,6 +723,7 @@ function mapTicketPriority(priority: string): Ticket["priority"] {
 }
 
 function mapTicket(dto: BackendTicket): Ticket {
+  const realStart = dto.served_at ?? dto.called_at ?? undefined;
   return {
     id: dto.id,
     number: dto.number,
@@ -714,9 +731,11 @@ function mapTicket(dto: BackendTicket): Ticket {
     priority: mapTicketPriority(dto.priority),
     created_at: dto.created_at,
     called_at:
-      dto.status === "called" || dto.status === "serving"
+      realStart ??
+      (dto.status === "called" || dto.status === "serving"
         ? new Date().toISOString()
-        : undefined,
+        : undefined),
+    closed_at: dto.done_at ?? undefined,
     service_id: dto.service_id,
     branch_id: dto.agency_id,
   };
@@ -756,37 +775,95 @@ export const mockApiService = mockApi;
 // Si VITE_USE_MOCK=true, on utilise le mock
 const apiImpl = IS_MOCK_MODE ? mockApi : null;
 
+function pickMembership(
+  user: BackendAuthUser,
+  preferredOrgId?: string,
+  preferredBranchId?: string
+): BackendMembership | null {
+  const list = (user.memberships ?? []).filter(
+    (m) => Boolean(m.org_id) && m.status !== "inactive"
+  );
+  if (list.length === 0) return null;
+
+  if (preferredOrgId && preferredBranchId) {
+    const exact = list.find(
+      (m) => m.org_id === preferredOrgId && m.branch_id === preferredBranchId
+    );
+    if (exact) return exact;
+  }
+
+  if (preferredOrgId) {
+    const sameOrgWithBranch = list.find(
+      (m) => m.org_id === preferredOrgId && Boolean(m.branch_id)
+    );
+    if (sameOrgWithBranch) return sameOrgWithBranch;
+  }
+
+  return (
+    list.find((m) => Boolean(m.branch_id) && Boolean(m.counter_id)) ??
+    list.find((m) => Boolean(m.branch_id)) ??
+    list[0]
+  );
+}
+
 /**
- * Résout l'organisation et l'agence du poste après connexion.
- * - Valeurs du build (VITE_TONDE_ORG_ID / VITE_TONDE_BRANCH_ID) ;
- * - sinon valeurs déjà enregistrées sur le poste ;
- * - sinon découverte automatique pour les rôles d'administration.
- * Un agent ne peut pas lister son organisation : l'écran de sélection
- * du guichet lui demande ces identifiants une seule fois.
+ * Résout l'organisation, l'agence et le guichet affecté après connexion.
+ * Ordre de priorité :
+ * 1. Valeurs du build (VITE_TONDE_ORG_ID / VITE_TONDE_BRANCH_ID) ;
+ * 2. Rattachements staff actifs (`user.memberships`) renvoyés par le backend ;
+ * 3. Contexte déjà enregistré sur le poste s'il appartient à la même organisation ;
+ * 4. Découverte de la première agence pour les rôles d'administration.
  */
-async function resolveContextAfterLogin(role: EmployeeRole): Promise<void> {
+async function resolveContextAfterLogin(
+  role: EmployeeRole,
+  user: BackendAuthUser
+): Promise<BackendMembership | null> {
   if (TONDE_ORG_ID && TONDE_BRANCH_ID) {
     setApiContext({ orgId: TONDE_ORG_ID, branchId: TONDE_BRANCH_ID });
-    return;
+    return pickMembership(user, TONDE_ORG_ID, TONDE_BRANCH_ID);
   }
-  if (getApiContext()) return;
-  if (role === "Agent" || role === "Supervisor") return;
+
+  const existing = getApiContext();
+  const membership = pickMembership(
+    user,
+    existing?.orgId,
+    existing?.branchId
+  );
+
+  if (membership?.org_id && membership.branch_id) {
+    setApiContext({
+      orgId: membership.org_id,
+      branchId: membership.branch_id,
+    });
+    return membership;
+  }
+
+  const knownOrgId = membership?.org_id ?? user.org_id ?? undefined;
+  if (existing && (!knownOrgId || existing.orgId === knownOrgId)) {
+    return membership;
+  }
+
+  if (role === "Agent" || role === "Supervisor") return membership;
 
   try {
-    const organizations = await httpClient.get<Paginated<{ id: string }>>(
-      "/organizations?page_size=1"
-    );
-    const orgId = organizations.items?.[0]?.id;
-    if (!orgId) return;
+    let orgId = knownOrgId;
+    if (!orgId) {
+      const organizations = await httpClient.get<Paginated<{ id: string }>>(
+        "/organizations?page_size=1"
+      );
+      orgId = organizations.items?.[0]?.id;
+    }
+    if (!orgId) return membership;
     const branches = await httpClient.get<Paginated<{ id: string }>>(
       `/organizations/${orgId}/branches?page_size=1`
     );
     const branchId = branches.items?.[0]?.id;
-    if (!branchId) return;
+    if (!branchId) return membership;
     setApiContext({ orgId, branchId });
   } catch {
     // Découverte impossible (rôle sans accès) : configuration manuelle.
   }
+  return membership;
 }
 
 async function fetchBranchDisplay(branchId: string): Promise<BackendDisplay> {
@@ -865,7 +942,7 @@ export const apiService = {
     }
 
     httpClient.setToken(auth.access_token);
-    await resolveContextAfterLogin(role);
+    const membership = await resolveContextAfterLogin(role, auth.user);
 
     const context = getApiContext();
 
@@ -874,12 +951,30 @@ export const apiService = {
       name: auth.user.name ?? auth.user.email ?? "Agent",
       email: auth.user.email ?? "",
       role,
-      branch_id: context?.branchId ?? "",
+      branch_id: context?.branchId ?? membership?.branch_id ?? "",
       branch_name: "",
+      counter_id: membership?.counter_id ?? undefined,
       token: auth.access_token,
       refresh_token: auth.refresh_token,
       token_expires_at: decodeJwtExpiry(auth.access_token),
     };
+  },
+
+  async hydrateSessionContext(
+    role: EmployeeRole
+  ): Promise<{ branchId: string; counterId?: string } | null> {
+    if (apiImpl) return null;
+    try {
+      const profile = await httpClient.get<BackendAuthUser>("/auth/me");
+      const membership = await resolveContextAfterLogin(role, profile);
+      const context = getApiContext();
+      return {
+        branchId: context?.branchId ?? membership?.branch_id ?? "",
+        counterId: membership?.counter_id ?? undefined,
+      };
+    } catch {
+      return null;
+    }
   },
 
   async logout(refreshToken?: string): Promise<void> {
@@ -949,7 +1044,7 @@ export const apiService = {
     }
 
     const now = new Date().toISOString();
-    return {
+    const fallbackTicket: Ticket = {
       id: result.ticket_id,
       number: result.ticket_number,
       status: "CALLED",
@@ -959,6 +1054,15 @@ export const apiService = {
       created_at: now,
       called_at: now,
     };
+
+    try {
+      const dto = await httpClient.get<BackendTicket>(
+        `/tickets/${result.ticket_id}`
+      );
+      return mapTicket(dto);
+    } catch {
+      return fallbackTicket;
+    }
   },
 
   async callTicketById(_ticketId: string, _counterId: string): Promise<Ticket> {
