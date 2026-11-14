@@ -68,10 +68,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Absent par défaut : le build reste non signé côté Authenticode,
-          # mais les artefacts de mise à jour sont signés par la clé minisign.
-          TAURI_CONFIG: ${{ secrets.TAURI_WINDOWS_SIGN_CONFIG }}
+          # Pas de TAURI_SIGNING_PRIVATE_KEY_PASSWORD : la clé a été générée
+          # sans mot de passe. Une variable vide ferait échouer le déchiffrement.
+          # Pas de TAURI_CONFIG ici : un secret absent est injecté comme chaîne
+          # vide, et le CLI échoue en tentant de parser "" comme du JSON.
+          # Quand un certificat Authenticode existera, ajouter à la place :
+          #   TAURI_CONFIG: '{"bundle":{"windows":{"certificateThumbprint":"..."}}}'
         with:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "TONDE Desktop ${{ github.event.inputs.tag || github.ref_name }}"
