@@ -131,5 +131,16 @@
     "absent": "Absent",
     "transferred": "Transferred",
     "avgTime": "Avg time"
+  },
+  "update": {
+    "availableTitle": "Update {{version}} available",
+    "availableHint": "Install it when no ticket is being served. The app will restart.",
+    "install": "Install",
+    "later": "Later",
+    "installingTitle": "Installing",
+    "installingHint": "Downloading… {{progress}}%",
+    "errorTitle": "Update failed",
+    "errorHint": "Check the workstation connection and try again.",
+    "retry": "Retry"
   }
 }

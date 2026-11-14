@@ -1,0 +1,93 @@
+name: Release desktop
+
+# Publie un installeur Windows signé + le manifeste de mise à jour (latest.json).
+# Déclenchement : push d'un tag `vX.Y.Z` (ex. v0.2.0) ou lancement manuel.
+#
+# Secrets requis :
+#   TAURI_SIGNING_PRIVATE_KEY           contenu de tonde-updater.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  vide si la clé n'a pas de mot de passe
+#   TAURI_WINDOWS_SIGN_CONFIG           (optionnel) JSON injecté dans la config
+#                                       pour la signature Authenticode
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag à publier (ex. v0.2.0)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build + signature + publication
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: npm ci
+
+      # Un tag qui ne correspond pas à la version du binaire produit un
+      # installeur que l'updater ne proposera jamais : on bloque avant le build.
+      - name: Vérifier tag == version
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          VERSION=$(node -p "require('./package.json').version")
+          CARGO_VERSION=$(grep -m1 '^version' src-tauri/Cargo.toml | cut -d'"' -f2)
+          echo "tag=$TAG version=$VERSION cargo=$CARGO_VERSION"
+          if [ "$TAG" != "v$VERSION" ]; then
+            echo "::error::Le tag $TAG ne correspond pas à la version $VERSION"
+            exit 1
+          fi
+          if [ "$CARGO_VERSION" != "$VERSION" ]; then
+            echo "::error::Cargo.toml ($CARGO_VERSION) et package.json ($VERSION) divergent"
+            exit 1
+          fi
+
+      - name: Build, signature et release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Absent par défaut : le build reste non signé côté Authenticode,
+          # mais les artefacts de mise à jour sont signés par la clé minisign.
+          TAURI_CONFIG: ${{ secrets.TAURI_WINDOWS_SIGN_CONFIG }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: "TONDE Desktop ${{ github.event.inputs.tag || github.ref_name }}"
+          releaseBody: |
+            Installeur Windows (MSI + NSIS) et manifeste de mise à jour.
+
+            Postes déjà équipés : la mise à jour est proposée automatiquement,
+            l'agent l'installe quand aucun ticket n'est en service.
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: true
+
+      - name: Résumé des artefacts
+        shell: bash
+        run: |
+          echo "### Artefacts publiés" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          ls -lh src-tauri/target/release/bundle/msi/ 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true
+          ls -lh src-tauri/target/release/bundle/nsis/ 2>/dev/null >> "$GITHUB_STEP_SUMMARY" || true

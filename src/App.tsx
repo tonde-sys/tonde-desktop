@@ -14,6 +14,7 @@ import { checkBackendHealth } from "./services/api/apiService";
 import { LoginPage } from "./pages/LoginPage";
 import { CounterSelectPage } from "./pages/CounterSelectPage";
 import { AgentDashboard } from "./pages/AgentDashboard";
+import { UpdateBanner } from "./components/ui/UpdateBanner";
 
 function BootScreen() {
   return (
@@ -113,6 +114,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <AppRouter />
+      <UpdateBanner />
     </QueryClientProvider>
   );
 }

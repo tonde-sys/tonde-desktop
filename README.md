@@ -108,6 +108,19 @@ L'API pilote est déployée sur Render :
 
 ---
 
+## Publication et mise à jour
+
+Un tag `vX.Y.Z` déclenche la construction, la signature et la publication de
+l'installeur + du manifeste de mise à jour (`.github/workflows/release.yml`).
+
+Les postes installés vérifient les mises à jour au démarrage puis toutes les
+6 h, et proposent l'installation sans jamais redémarrer d'eux-mêmes.
+
+Procédure complète, gestion de la clé de signature et options de certificat
+Windows : [docs/DISTRIBUTION.md](docs/DISTRIBUTION.md).
+
+---
+
 ## Architecture
 
 ```

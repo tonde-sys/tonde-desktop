@@ -21,6 +21,10 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // Requêtes HTTP natives (pas de CORS WebView vers l'API Render)
         .plugin(tauri_plugin_http::init())
+        // Mise à jour automatique : vérifie `latest.json`, valide la signature
+        // minisign du paquet, installe puis redémarre l'application.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         // ── Cache SQLite (offline-first) ──
         .setup(|app| {
             let connection = match app.path().app_data_dir() {

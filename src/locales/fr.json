@@ -131,5 +131,16 @@
     "absent": "Absents",
     "transferred": "Transférés",
     "avgTime": "Temps moyen"
+  },
+  "update": {
+    "availableTitle": "Mise à jour {{version}} disponible",
+    "availableHint": "Installez-la quand aucun ticket n'est en cours de service. L'application redémarrera.",
+    "install": "Installer",
+    "later": "Plus tard",
+    "installingTitle": "Installation en cours",
+    "installingHint": "Téléchargement… {{progress}} %",
+    "errorTitle": "Mise à jour impossible",
+    "errorHint": "Vérifiez la connexion du poste puis réessayez.",
+    "retry": "Réessayer"
   }
 }
