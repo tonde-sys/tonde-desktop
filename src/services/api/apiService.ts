@@ -972,7 +972,8 @@ async function fetchBranchDisplay(branchId: string): Promise<BackendDisplay> {
 /** Sonde de récupération réseau : légère, sans authentification. */
 export async function checkBackendHealth(): Promise<boolean> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5_000);
+  // Cold start Render : 5 s échouent systématiquement pendant le réveil.
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
     const res = await appFetch(`${API_BASE_URL}/health`, {
       method: "GET",

@@ -10,6 +10,7 @@ import type { AuthUser, LoginCredentials, EmployeeRole } from "../types";
 import {
   apiService,
   ApiError,
+  checkBackendHealth,
   getApiContext,
   httpClient,
   setApiContext,
@@ -31,6 +32,7 @@ interface AuthState {
   user: AuthUser | null;
   isAuthenticated: boolean;
   isLoading: boolean;
+  isWaking: boolean;
   isInitializing: boolean;
   isInitialized: boolean;
   error: string | null;
@@ -78,12 +80,39 @@ function friendlyLoginError(err: unknown): string {
   return "Serveur TONDE injoignable. Vérifiez votre connexion.";
 }
 
+// Le service Render gratuit s'endort : le premier appel peut être coupé
+// pendant le réveil. On réessaie le login plutôt que de faire recliquer.
+const WAKE_RETRY_DELAYS_MS = [2_000, 5_000, 8_000];
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function loginWithWakeRetry(
+  credentials: LoginCredentials,
+  onWake: () => void
+): Promise<AuthUser> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await apiService.login(credentials);
+    } catch (err) {
+      const networkFailure = err instanceof ApiError && err.status === 0;
+      if (!networkFailure || attempt >= WAKE_RETRY_DELAYS_MS.length) {
+        throw err;
+      }
+      onWake();
+      await sleep(WAKE_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+}
+
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
       user: null,
       isAuthenticated: false,
       isLoading: false,
+      isWaking: false,
       isInitializing: false,
       isInitialized: false,
       error: null,
@@ -91,6 +120,10 @@ export const useAuthStore = create<AuthState>()(
       initialize: async () => {
         if (get().isInitialized || get().isInitializing) return;
         set({ isInitializing: true });
+
+        // Réveille le service Render pendant que l'agent saisit ses
+        // identifiants : le cold start est absorbé avant le login.
+        void checkBackendHealth();
 
         httpClient.setRefreshHandler(async () => {
           try {
@@ -173,9 +206,11 @@ export const useAuthStore = create<AuthState>()(
       },
 
       login: async (credentials) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, isWaking: false, error: null });
         try {
-          const user = await apiService.login(credentials);
+          const user = await loginWithWakeRetry(credentials, () =>
+            set({ isWaking: true })
+          );
 
           // Écriture de cache hors du chemin critique : le login réussit
           // même si le coffre ou SQLite est indisponible.
@@ -202,6 +237,7 @@ export const useAuthStore = create<AuthState>()(
             user,
             isAuthenticated: true,
             isLoading: false,
+            isWaking: false,
             error: null,
           });
 
@@ -216,6 +252,7 @@ export const useAuthStore = create<AuthState>()(
             user: null,
             isAuthenticated: false,
             isLoading: false,
+            isWaking: false,
             error: friendlyLoginError(err),
           });
         }

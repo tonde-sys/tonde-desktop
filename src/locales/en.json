@@ -10,6 +10,7 @@
     "password": "Password",
     "loginButton": "Sign in",
     "loggingIn": "Signing in...",
+    "wakingServer": "Waking the TONDE server...",
     "server": "Server: {{host}}",
     "coldStart": "First call: the server may take ~30 s to wake up",
     "mockServer": "Local demo mode — simulated API",

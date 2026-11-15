@@ -10,6 +10,7 @@
     "password": "Mot de passe",
     "loginButton": "Se connecter",
     "loggingIn": "Connexion...",
+    "wakingServer": "Réveil du serveur TONDE...",
     "server": "Serveur : {{host}}",
     "coldStart": "Premier appel : le réveil du serveur peut prendre ~30 s",
     "mockServer": "Mode démo local — API simulée",

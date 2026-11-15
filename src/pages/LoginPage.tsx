@@ -22,7 +22,7 @@ type LoginForm = z.infer<typeof loginSchema>;
 
 export function LoginPage() {
   const { t } = useTranslation();
-  const { login, isLoading, error, clearError } = useAuthStore();
+  const { login, isLoading, isWaking, error, clearError } = useAuthStore();
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -123,7 +123,7 @@ export function LoginPage() {
             {isLoading ? (
               <>
                 <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                {t("auth.loggingIn")}
+                {isWaking ? t("auth.wakingServer") : t("auth.loggingIn")}
               </>
             ) : (
               <>
