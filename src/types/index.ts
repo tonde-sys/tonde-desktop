@@ -8,6 +8,7 @@ export type TicketStatus =
   | "WAITING"
   | "CALLED"
   | "PROCESSING"
+  | "INCOMPLETE"
   | "COMPLETED"
   | "ABSENT"
   | "CANCELLED";
@@ -161,6 +162,7 @@ export type SyncActionType =
   | "START_SERVING"
   | "RECALL_TICKET"
   | "MARK_ABSENT"
+  | "MARK_INCOMPLETE"
   | "COMPLETE_TICKET"
   | "TRANSFER_TICKET"
   | "PAUSE_COUNTER"

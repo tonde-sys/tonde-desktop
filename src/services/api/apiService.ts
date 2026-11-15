@@ -144,6 +144,89 @@ const mockApi = {
     }
   },
 
+  async markTicketIncomplete(
+    ticketId: string,
+    _counterId: string,
+    _reason?: string
+  ): Promise<void> {
+    await delay(200);
+    const ticket = mockTickets.find((t) => t.id === ticketId);
+    if (ticket) {
+      ticket.status = "INCOMPLETE";
+    }
+  },
+
+  async returnTicketToQueue(ticketId: string): Promise<void> {
+    await delay(200);
+    const ticket = mockTickets.find((t) => t.id === ticketId);
+    if (ticket) {
+      ticket.status = "WAITING";
+      ticket.called_at = undefined;
+      ticket.served_at = undefined;
+      ticket.closed_at = undefined;
+    }
+  },
+
+  async requeueTicket(ticketId: string): Promise<void> {
+    await delay(200);
+    const ticket = mockTickets.find((t) => t.id === ticketId);
+    if (ticket) {
+      ticket.status = "WAITING";
+      ticket.called_at = undefined;
+      ticket.served_at = undefined;
+      ticket.closed_at = undefined;
+    }
+  },
+
+  async closeTicket(ticketId: string, _reason?: string): Promise<void> {
+    await delay(200);
+    const ticket = mockTickets.find((t) => t.id === ticketId);
+    if (ticket) {
+      ticket.status = "CANCELLED";
+      ticket.closed_at = new Date().toISOString();
+    }
+  },
+
+  async decideTicketPriority(
+    ticketId: string,
+    options: {
+      approve: boolean;
+      priority?: "standard" | "priority" | "vip" | "emergency";
+    }
+  ): Promise<void> {
+    await delay(200);
+    const ticket = mockTickets.find((t) => t.id === ticketId);
+    if (!ticket) return;
+    if (options.approve) {
+      if (options.priority) {
+        ticket.priority =
+          options.priority === "vip" || options.priority === "emergency"
+            ? 2
+            : options.priority === "priority"
+              ? 1
+              : 0;
+      } else if (ticket.requested_priority !== undefined) {
+        ticket.priority = ticket.requested_priority;
+      }
+    }
+    ticket.requested_priority = undefined;
+  },
+
+  async lookupTicket(codeOrId: string): Promise<Ticket> {
+    await delay(150);
+    const q = codeOrId.trim().toLowerCase();
+    const found = mockTickets.find(
+      (t) =>
+        t.id.toLowerCase() === q ||
+        t.number.toLowerCase() === q ||
+        t.number.replace("-", "").toLowerCase() === q.replace("-", "")
+    );
+    if (!found) {
+      throw new ApiError("Ticket introuvable", 404, "TICKET_NOT_FOUND");
+    }
+    return { ...found };
+  },
+
   async completeTicket(ticketId: string, _counterId: string): Promise<void> {
     await delay(200);
     const ticket = mockTickets.find(t => t.id === ticketId);
@@ -720,6 +803,7 @@ const TICKET_STATUS_MAP: Record<string, Ticket["status"]> = {
   called: "CALLED",
   serving: "PROCESSING",
   processing: "PROCESSING",
+  incomplete: "INCOMPLETE",
   done: "COMPLETED",
   completed: "COMPLETED",
   absent: "ABSENT",
@@ -1127,6 +1211,96 @@ export const apiService = {
       if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
         throw err;
       }
+    }
+  },
+
+  async markTicketIncomplete(
+    ticketId: string,
+    _counterId: string,
+    reason?: string
+  ): Promise<void> {
+    if (apiImpl) {
+      return apiImpl.markTicketIncomplete(ticketId, _counterId, reason);
+    }
+    try {
+      await httpClient.post(
+        `/tickets/${ticketId}/incomplete`,
+        reason ? { reason } : undefined
+      );
+    } catch (err) {
+      if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
+        throw err;
+      }
+    }
+  },
+
+  async returnTicketToQueue(ticketId: string): Promise<void> {
+    if (apiImpl) return apiImpl.returnTicketToQueue(ticketId);
+    await httpClient.post(`/tickets/${ticketId}/return`);
+  },
+
+  async requeueTicket(ticketId: string): Promise<void> {
+    if (apiImpl) return apiImpl.requeueTicket(ticketId);
+    await httpClient.post(`/tickets/${ticketId}/requeue`);
+  },
+
+  async closeTicket(ticketId: string, reason?: string): Promise<void> {
+    if (apiImpl) return apiImpl.closeTicket(ticketId, reason);
+    await httpClient.post(
+      `/tickets/${ticketId}/close`,
+      reason ? { reason } : undefined
+    );
+  },
+
+  async decideTicketPriority(
+    ticketId: string,
+    options: {
+      approve: boolean;
+      priority?: "standard" | "priority" | "vip" | "emergency";
+    }
+  ): Promise<void> {
+    if (apiImpl) return apiImpl.decideTicketPriority(ticketId, options);
+    await httpClient.post(`/tickets/${ticketId}/priority`, options);
+  },
+
+  async lookupTicket(codeOrId: string): Promise<Ticket> {
+    const trimmed = codeOrId.trim();
+    if (!trimmed) {
+      throw new ApiError("Saisissez un code QR ou un identifiant de ticket", 400);
+    }
+    if (apiImpl) return apiImpl.lookupTicket(trimmed);
+
+    try {
+      const qrData = await httpClient.get<{
+        ticket_id?: string;
+        number: string;
+        status: string;
+        priority: string;
+        requested_priority?: string | null;
+        agency_id?: string;
+        service_id?: string;
+        created_at: string;
+      }>(`/tickets/qr/${encodeURIComponent(trimmed)}`);
+
+      if (qrData.ticket_id) {
+        return await this.getTicket(qrData.ticket_id);
+      }
+      return mapTicket({
+        id: trimmed,
+        number: qrData.number,
+        status: qrData.status,
+        priority: qrData.priority,
+        requested_priority: qrData.requested_priority,
+        agency_id: qrData.agency_id ?? getApiContext()?.branchId ?? "",
+        service_id: qrData.service_id ?? "",
+        created_at: qrData.created_at,
+        counter_name: null,
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        return await this.getTicket(trimmed);
+      }
+      throw err;
     }
   },
 

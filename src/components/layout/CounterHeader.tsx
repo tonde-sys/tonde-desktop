@@ -6,7 +6,8 @@
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../../store/authStore";
 import { useCounterStore } from "../../store/counterStore";
-import { Pause, Play, Power, User } from "lucide-react";
+import { useAppStore } from "../../store/app.store";
+import { Pause, Play, Power, QrCode, User } from "lucide-react";
 
 interface CounterHeaderProps {
   onPause: () => void;
@@ -23,6 +24,7 @@ export function CounterHeader({ onPause, onLogout }: CounterHeaderProps) {
   const { t } = useTranslation();
   const user = useAuthStore((s) => s.user);
   const myCounter = useCounterStore((s) => s.myCounter);
+  const openLookupModal = useAppStore((s) => s.openLookupModal);
 
   const statusClass = myCounter ? STATUS_CLASSES[myCounter.status] : "text-text-muted";
   const statusLabel = myCounter
@@ -66,6 +68,16 @@ export function CounterHeader({ onPause, onLogout }: CounterHeaderProps) {
 
       {/* Droite : actions */}
       <div className="flex items-center gap-2">
+        <button
+          onClick={openLookupModal}
+          className="btn-ghost text-sm flex items-center gap-1.5"
+          title={t("ticket.lookupTitle")}
+        >
+          <QrCode size={14} />
+          <span className="hidden md:inline">{t("ticket.lookupButton")}</span>
+          <span className="kbd">F</span>
+        </button>
+
         {myCounter && myCounter.status !== "CLOSED" && (
           <button
             onClick={onPause}

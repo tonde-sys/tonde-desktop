@@ -254,6 +254,13 @@ async function dispatchSyncAction(item: SyncQueueItem): Promise<void> {
     case "MARK_ABSENT":
       await apiService.markTicketAbsent(p.ticket_id as string, p.counter_id as string);
       break;
+    case "MARK_INCOMPLETE":
+      await apiService.markTicketIncomplete(
+        p.ticket_id as string,
+        p.counter_id as string,
+        p.reason as string | undefined
+      );
+      break;
     case "COMPLETE_TICKET":
       await apiService.completeTicket(p.ticket_id as string, p.counter_id as string);
       break;

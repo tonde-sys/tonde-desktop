@@ -321,4 +321,88 @@ describe("apiService — contexte staff & cycle de vie ticket", () => {
     ).resolves.toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("couvre markTicketIncomplete, requeueTicket, returnTicketToQueue, closeTicket et decideTicketPriority", async () => {
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({ success: true, ticket_id: "t-1" }))
+      .mockResolvedValueOnce(
+        mockResponse({ success: true, ticket_id: "t-1", position: 1 })
+      )
+      .mockResolvedValueOnce(
+        mockResponse({ success: true, ticket_id: "t-2", position: 2 })
+      )
+      .mockResolvedValueOnce(mockResponse({ success: true, ticket_id: "t-3" }))
+      .mockResolvedValueOnce(
+        mockResponse({
+          success: true,
+          ticket_id: "t-4",
+          priority: "vip",
+          position: 1,
+        })
+      );
+
+    await expect(
+      apiService.markTicketIncomplete("t-1", "counter-1", "Pièce manquante")
+    ).resolves.toBeUndefined();
+    await expect(apiService.requeueTicket("t-1")).resolves.toBeUndefined();
+    await expect(
+      apiService.returnTicketToQueue("t-2")
+    ).resolves.toBeUndefined();
+    await expect(
+      apiService.closeTicket("t-3", "Abandon")
+    ).resolves.toBeUndefined();
+    await expect(
+      apiService.decideTicketPriority("t-4", {
+        approve: true,
+        priority: "vip",
+      })
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(5);
+  });
+
+  it("lookupTicket résout un QR token staff vers le détail complet du ticket", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        mockResponse({
+          success: true,
+          data: {
+            ticket_id: "t-qr-1",
+            number: "B-007",
+            status: "incomplete",
+            priority: "standard",
+            requested_priority: "priority",
+            agency_id: "branch-456",
+            service_id: "svc-2",
+            created_at: "2026-11-15T09:00:00Z",
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        mockResponse({
+          success: true,
+          data: {
+            id: "t-qr-1",
+            number: "B-007",
+            status: "incomplete",
+            priority: "standard",
+            requested_priority: "priority",
+            agency_id: "branch-456",
+            service_id: "svc-2",
+            created_at: "2026-11-15T09:00:00Z",
+            counter_name: null,
+          },
+        })
+      );
+
+    const ticket = await apiService.lookupTicket("qr-uuid-token");
+
+    expect(ticket).toMatchObject({
+      id: "t-qr-1",
+      number: "B-007",
+      status: "INCOMPLETE",
+      priority: 0,
+      requested_priority: 1,
+    });
+  });
 });

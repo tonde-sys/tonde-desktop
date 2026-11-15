@@ -17,6 +17,8 @@ export interface ShortcutHandlers {
   onRecall?: () => void;
   onComplete?: () => void;
   onMarkAbsent?: () => void;
+  onMarkIncomplete?: () => void;
+  onLookupTicket?: () => void;
   onTransfer?: () => void;
   onPause?: () => void;
   onHelp?: () => void;
@@ -66,9 +68,9 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
 
     // Un dialogue ouvert capture les actions métier : seuls Échap et
     // l'aide restent actifs. Le modal de transfert gère ses flèches.
-    const { isShortcutsHelpOpen, isTransferModalOpen } =
+    const { isShortcutsHelpOpen, isTransferModalOpen, isLookupModalOpen } =
       useAppStore.getState();
-    if (isShortcutsHelpOpen || isTransferModalOpen) {
+    if (isShortcutsHelpOpen || isTransferModalOpen || isLookupModalOpen) {
       if (key === "Escape") {
         handlersRef.current.onEscape?.();
       } else if (key === "F12") {
@@ -101,6 +103,18 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
       case "F2":
         e.preventDefault();
         handlersRef.current.onMarkAbsent?.();
+        break;
+
+      case "i":
+      case "I": // I — Dossier incomplet
+        e.preventDefault();
+        handlersRef.current.onMarkIncomplete?.();
+        break;
+
+      case "f":
+      case "F": // F — Rechercher / Scanner un ticket (QR · Priorité)
+        e.preventDefault();
+        handlersRef.current.onLookupTicket?.();
         break;
 
       case "t":
@@ -138,6 +152,7 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers) {
 
 export function useAgentShortcuts(options: {
   onOpenTransfer: () => void;
+  onOpenLookup?: () => void;
   onOpenHelp: () => void;
   onCloseDialog: () => void;
 }) {
@@ -147,6 +162,7 @@ export function useAgentShortcuts(options: {
     recall,
     complete,
     markAbsent,
+    markIncomplete,
     currentTicket,
   } = useTicketStore();
   const { myCounter, pauseCounter, resumeCounter } = useCounterStore();
@@ -180,6 +196,16 @@ export function useAgentShortcuts(options: {
       if (!currentTicket || !myCounter) return;
       if (currentTicket.status !== "CALLED") return;
       void markAbsent(currentTicket.id, myCounter.id);
+    },
+
+    onMarkIncomplete: () => {
+      if (!currentTicket || !myCounter) return;
+      if (currentTicket.status !== "PROCESSING") return;
+      void markIncomplete(currentTicket.id, myCounter.id);
+    },
+
+    onLookupTicket: () => {
+      options.onOpenLookup?.();
     },
 
     onTransfer: () => {

@@ -41,6 +41,18 @@ export const SHORTCUTS = {
     description: "Marquer client absent (alt)",
     tauri: "F2",
   },
+  MARK_INCOMPLETE: {
+    key: "i",
+    label: "I",
+    description: "Marquer dossier incomplet",
+    tauri: "KeyI",
+  },
+  LOOKUP_TICKET: {
+    key: "f",
+    label: "F",
+    description: "Rechercher / Scanner un ticket (QR · Priorité)",
+    tauri: "KeyF",
+  },
   TRANSFER: {
     key: "t",
     label: "T",

@@ -19,6 +19,7 @@ interface TicketState {
   currentTicket: Ticket | null;
   processingStartedAt: string | null;
   recentTickets: Ticket[];
+  heldTickets: Ticket[];
   isLoading: boolean;
   error: string | null;
 
@@ -27,6 +28,19 @@ interface TicketState {
   startServing: (ticketId: string, counterId: string) => Promise<void>;
   recall: (counterId: string) => Promise<void>;
   markAbsent: (ticketId: string, counterId: string) => Promise<void>;
+  markIncomplete: (
+    ticketId: string,
+    counterId: string,
+    reason?: string
+  ) => Promise<void>;
+  returnToQueue: (ticket: Ticket) => Promise<boolean>;
+  closeHeldTicket: (ticketId: string, reason?: string) => Promise<boolean>;
+  decidePriority: (
+    ticketId: string,
+    approve: boolean,
+    priority?: "standard" | "priority" | "vip" | "emergency"
+  ) => Promise<Ticket | null>;
+  loadHeldTickets: (branchId: string) => Promise<void>;
   complete: (ticketId: string, counterId: string) => Promise<void>;
   transfer: (ticketId: string, toCounterId: string, toServiceId: string) => Promise<boolean>;
 
@@ -96,6 +110,7 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
   currentTicket: null,
   processingStartedAt: null,
   recentTickets: [],
+  heldTickets: [],
   isLoading: false,
   error: null,
 
@@ -313,21 +328,25 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
     }
 
     const previousStartedAt = get().processingStartedAt;
-    set({
+    const absentTicket: Ticket = {
+      ...ticket,
+      status: "ABSENT",
+      closed_at: nowIso(),
+    };
+    set((state) => ({
       isLoading: true,
       error: null,
       currentTicket: null,
       processingStartedAt: null,
-    });
+      heldTickets: [
+        absentTicket,
+        ...state.heldTickets.filter((t) => t.id !== absentTicket.id),
+      ].slice(0, 10),
+    }));
     void playAlertSound();
 
     const closeInCache = async (): Promise<void> => {
-      const updated: Ticket = {
-        ...ticket,
-        status: "ABSENT",
-        closed_at: nowIso(),
-      };
-      await db.upsertTicket(updated);
+      await db.upsertTicket(absentTicket);
       await useOfflineStore.getState().enqueue("MARK_ABSENT", {
         ticket_id: ticketId,
         counter_id: counterId,
@@ -338,6 +357,7 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       if (useOfflineStore.getState().isOnline) {
         try {
           await apiService.markTicketAbsent(ticketId, counterId);
+          await db.upsertTicket(absentTicket);
           refreshQueues();
           notify("info", `Ticket ${ticket.number} marqué absent`);
           return;
@@ -357,13 +377,196 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         "Synchronisation automatique en attente."
       );
     } catch (err) {
-      set({
+      set((state) => ({
         currentTicket: ticket,
         processingStartedAt: previousStartedAt,
-      });
+        heldTickets: state.heldTickets.filter((t) => t.id !== absentTicket.id),
+      }));
       notify("error", "Impossible de marquer absent", errorMessage(err));
     } finally {
       set({ isLoading: false });
+    }
+  },
+
+  markIncomplete: async (ticketId, counterId, reason) => {
+    const ticket = get().currentTicket;
+    if (!ticket || get().isLoading) {
+      if (!ticket) notify("warning", "Aucun ticket en cours");
+      return;
+    }
+    if (!canTransition(ticket.status, "INCOMPLETE")) {
+      notify(
+        "warning",
+        "Action impossible",
+        `Le ticket ${ticket.number} est au statut ${ticket.status}.`
+      );
+      return;
+    }
+
+    const previousStartedAt = get().processingStartedAt;
+    const incompleteTicket: Ticket = {
+      ...ticket,
+      status: "INCOMPLETE",
+    };
+
+    set((state) => ({
+      isLoading: true,
+      error: null,
+      currentTicket: null,
+      processingStartedAt: null,
+      heldTickets: [
+        incompleteTicket,
+        ...state.heldTickets.filter((t) => t.id !== incompleteTicket.id),
+      ].slice(0, 10),
+    }));
+
+    const saveInOutbox = async (): Promise<void> => {
+      await db.upsertTicket(incompleteTicket);
+      await useOfflineStore.getState().enqueue("MARK_INCOMPLETE", {
+        ticket_id: ticketId,
+        counter_id: counterId,
+        reason,
+      });
+    };
+
+    try {
+      if (useOfflineStore.getState().isOnline) {
+        try {
+          await apiService.markTicketIncomplete(ticketId, counterId, reason);
+          await db.upsertTicket(incompleteTicket);
+          refreshQueues();
+          notify("info", `Ticket ${ticket.number} mis en suspens (incomplet)`);
+          return;
+        } catch (err) {
+          if (isNetworkFailure(err)) {
+            useOfflineStore.getState().setOnline(false);
+          } else if (!isTimeoutFailure(err)) {
+            throw err;
+          }
+        }
+      }
+
+      await saveInOutbox();
+      notify(
+        "warning",
+        "Dossier incomplet enregistré",
+        "Synchronisation automatique en attente."
+      );
+    } catch (err) {
+      set((state) => ({
+        currentTicket: ticket,
+        processingStartedAt: previousStartedAt,
+        heldTickets: state.heldTickets.filter(
+          (t) => t.id !== incompleteTicket.id
+        ),
+      }));
+      notify("error", "Interruption impossible", errorMessage(err));
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  returnToQueue: async (ticket) => {
+    if (get().isLoading) return false;
+    set({ isLoading: true });
+    try {
+      if (ticket.status === "INCOMPLETE") {
+        await apiService.requeueTicket(ticket.id);
+      } else {
+        await apiService.returnTicketToQueue(ticket.id);
+      }
+      const updated: Ticket = {
+        ...ticket,
+        status: "WAITING",
+        called_at: undefined,
+        served_at: undefined,
+        closed_at: undefined,
+      };
+      await db.upsertTicket(updated);
+      set((state) => ({
+        heldTickets: state.heldTickets.filter((t) => t.id !== ticket.id),
+      }));
+      refreshQueues();
+      notify("success", `Ticket ${ticket.number} remis en file`);
+      return true;
+    } catch (err) {
+      notify("error", "Remise en file impossible", errorMessage(err));
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  closeHeldTicket: async (ticketId, reason) => {
+    if (get().isLoading) return false;
+    const target = get().heldTickets.find((t) => t.id === ticketId);
+    set({ isLoading: true });
+    try {
+      await apiService.closeTicket(ticketId, reason);
+      if (target) {
+        await db.upsertTicket({
+          ...target,
+          status: "CANCELLED",
+          closed_at: nowIso(),
+        });
+      }
+      set((state) => ({
+        heldTickets: state.heldTickets.filter((t) => t.id !== ticketId),
+      }));
+      refreshQueues();
+      notify(
+        "info",
+        target
+          ? `Ticket ${target.number} clôturé`
+          : "Ticket clôturé"
+      );
+      return true;
+    } catch (err) {
+      notify("error", "Clôture impossible", errorMessage(err));
+      return false;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  decidePriority: async (ticketId, approve, priority) => {
+    if (get().isLoading) return null;
+    set({ isLoading: true });
+    try {
+      await apiService.decideTicketPriority(ticketId, { approve, priority });
+      const refreshed = await apiService.getTicket(ticketId);
+      await db.upsertTicket(refreshed);
+      refreshQueues();
+      notify(
+        "success",
+        approve ? "Priorité confirmée" : "Demande de priorité refusée",
+        `Ticket ${refreshed.number}`
+      );
+      return refreshed;
+    } catch (err) {
+      notify("error", "Décision de priorité impossible", errorMessage(err));
+      return null;
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  loadHeldTickets: async (branchId) => {
+    if (!branchId) return;
+    try {
+      const [absentTickets, incompleteTickets] = await Promise.all([
+        db.getTicketsByStatus(branchId, "ABSENT"),
+        db.getTicketsByStatus(branchId, "INCOMPLETE"),
+      ]);
+      const cached = [...incompleteTickets, ...absentTickets];
+      const cutoffMs = Date.now() - 12 * 3600 * 1000;
+      const held = cached.filter((t) => {
+        const createdMs = Date.parse(t.created_at);
+        return Number.isNaN(createdMs) || createdMs >= cutoffMs;
+      });
+      set({ heldTickets: held.slice(0, 10) });
+    } catch {
+      // Cache SQLite indisponible
     }
   },
 

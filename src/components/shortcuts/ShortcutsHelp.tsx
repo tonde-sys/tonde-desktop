@@ -77,6 +77,14 @@ export function ShortcutsHelp() {
             label={t("shortcuts.markAbsent")}
           />
           <ShortcutRow
+            keys={[SHORTCUTS.MARK_INCOMPLETE.label]}
+            label={t("shortcuts.markIncomplete")}
+          />
+          <ShortcutRow
+            keys={[SHORTCUTS.LOOKUP_TICKET.label]}
+            label={t("shortcuts.lookupTicket")}
+          />
+          <ShortcutRow
             keys={[SHORTCUTS.TRANSFER.label, SHORTCUTS.TRANSFER_F3.label]}
             label={t("shortcuts.transfer")}
           />

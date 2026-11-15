@@ -11,18 +11,30 @@ import type { TicketStatus } from "../types";
 // DONE en une seule action), mais un ticket en service (SERVING) ne peut
 // pas devenir ABSENT ni être annulé par le guichet.
 const TRANSITIONS: Partial<Record<TicketStatus, TicketStatus[]>> = {
-  WAITING: ["CALLED"],
+  WAITING: ["CALLED", "CANCELLED"],
   CALLED: ["PROCESSING", "COMPLETED", "ABSENT"],
-  PROCESSING: ["COMPLETED"],
+  PROCESSING: ["COMPLETED", "INCOMPLETE"],
+  INCOMPLETE: ["WAITING", "CANCELLED"],
+  ABSENT: ["WAITING", "CANCELLED"],
 };
 
 // Actions disponibles par état
-type TicketAction = "call" | "startService" | "markAbsent" | "complete" | "transfer";
+type TicketAction =
+  | "call"
+  | "startService"
+  | "markAbsent"
+  | "markIncomplete"
+  | "complete"
+  | "transfer"
+  | "requeue"
+  | "close";
 
 const AVAILABLE_ACTIONS: Partial<Record<TicketStatus, TicketAction[]>> = {
-  WAITING: ["call"],
+  WAITING: ["call", "close"],
   CALLED: ["startService", "complete", "markAbsent", "transfer"],
-  PROCESSING: ["complete", "transfer"],
+  PROCESSING: ["complete", "markIncomplete", "transfer"],
+  INCOMPLETE: ["requeue", "close"],
+  ABSENT: ["requeue", "close"],
 };
 
 /**

@@ -11,6 +11,7 @@ interface AppState {
   notifications: Notification[];
   isShortcutsHelpOpen: boolean;
   isTransferModalOpen: boolean;
+  isLookupModalOpen: boolean;
 
   // Notifications toast
   addNotification: (n: Omit<Notification, "id" | "created_at">) => void;
@@ -21,6 +22,8 @@ interface AppState {
   closeShortcutsHelp: () => void;
   openTransferModal: () => void;
   closeTransferModal: () => void;
+  openLookupModal: () => void;
+  closeLookupModal: () => void;
   closeAllDialogs: () => void;
 }
 
@@ -28,6 +31,7 @@ export const useAppStore = create<AppState>()((set, get) => ({
   notifications: [],
   isShortcutsHelpOpen: false,
   isTransferModalOpen: false,
+  isLookupModalOpen: false,
 
   addNotification: (n) => {
     const notification: Notification = {
@@ -54,6 +58,12 @@ export const useAppStore = create<AppState>()((set, get) => ({
   closeShortcutsHelp: () => set({ isShortcutsHelpOpen: false }),
   openTransferModal: () => set({ isTransferModalOpen: true }),
   closeTransferModal: () => set({ isTransferModalOpen: false }),
+  openLookupModal: () => set({ isLookupModalOpen: true }),
+  closeLookupModal: () => set({ isLookupModalOpen: false }),
   closeAllDialogs: () =>
-    set({ isShortcutsHelpOpen: false, isTransferModalOpen: false }),
+    set({
+      isShortcutsHelpOpen: false,
+      isTransferModalOpen: false,
+      isLookupModalOpen: false,
+    }),
 }));

@@ -9,6 +9,7 @@ import { useTranslation } from "react-i18next";
 import { AgentLayout } from "../components/layout/AgentLayout";
 import { ShortcutsHelp } from "../components/shortcuts/ShortcutsHelp";
 import { TransferModal } from "../components/ticket/TransferModal";
+import { TicketLookupModal } from "../components/ticket/TicketLookupModal";
 import { useAppStore } from "../store/app.store";
 import { useCounterStore } from "../store/counterStore";
 import { useTicketStore } from "../store/ticketStore";
@@ -30,6 +31,8 @@ import {
   Inbox,
   Play,
   Clock,
+  FileWarning,
+  X,
 } from "lucide-react";
 
 export function AgentDashboard() {
@@ -41,16 +44,26 @@ export function AgentDashboard() {
   const {
     currentTicket,
     processingStartedAt,
+    heldTickets,
     isLoading,
     callNext,
     startServing,
     markAbsent,
+    markIncomplete,
+    returnToQueue,
+    closeHeldTicket,
+    loadHeldTickets,
     recall,
     complete,
   } = useTicketStore();
   const isOnline = useOfflineStore((s) => s.isOnline);
   const { queues, services, loadQueues } = useQueueStore();
-  const { openTransferModal, openShortcutsHelp, closeAllDialogs } = useAppStore();
+  const {
+    openTransferModal,
+    openLookupModal,
+    openShortcutsHelp,
+    closeAllDialogs,
+  } = useAppStore();
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const timerAnchor =
@@ -98,12 +111,13 @@ export function AgentDashboard() {
     // Au montage uniquement : myCounter est ensuite piloté par le store.
   }, []);
 
-  // Chargement initial de la file
+  // Chargement initial de la file et des tickets en suspens
   useEffect(() => {
     if (user?.branch_id) {
       loadQueues(user.branch_id);
+      void loadHeldTickets(user.branch_id);
     }
-  }, [user?.branch_id, loadQueues]);
+  }, [user?.branch_id, loadQueues, loadHeldTickets]);
 
   // Connexion WebSocket du guichet + polling de la file
   useEffect(() => {
@@ -116,6 +130,7 @@ export function AgentDashboard() {
   // Raccourcis clavier
   useAgentShortcuts({
     onOpenTransfer: openTransferModal,
+    onOpenLookup: openLookupModal,
     onOpenHelp: openShortcutsHelp,
     onCloseDialog: closeAllDialogs,
   });
@@ -145,6 +160,11 @@ export function AgentDashboard() {
   const handleMarkAbsent = () => {
     if (!currentTicket || !myCounter) return;
     void markAbsent(currentTicket.id, myCounter.id);
+  };
+
+  const handleMarkIncomplete = () => {
+    if (!currentTicket || !myCounter) return;
+    void markIncomplete(currentTicket.id, myCounter.id);
   };
 
   const handleRecall = () => {
@@ -268,6 +288,17 @@ export function AgentDashboard() {
                     <UserX size={16} />
                     {t("ticket.markAbsent")}
                     <span className="kbd kbd-inverse">A</span>
+                  </button>
+                )}
+                {currentTicket.status === "PROCESSING" && (
+                  <button
+                    onClick={handleMarkIncomplete}
+                    disabled={isLoading}
+                    className="btn-ghost border border-amber/40 text-amber hover:bg-amber/10 flex items-center gap-2"
+                  >
+                    <FileWarning size={16} />
+                    {t("ticket.markIncomplete")}
+                    <span className="kbd">I</span>
                   </button>
                 )}
                 <button
@@ -399,6 +430,64 @@ export function AgentDashboard() {
               </div>
             )}
           </div>
+
+          {/* Section bas du panneau droit : tickets en suspens (Absents / Incomplets) */}
+          {heldTickets.length > 0 && (
+            <div className="border-t border-border-subtle p-3 bg-ink/60">
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-text-secondary text-xs font-medium uppercase tracking-wider">
+                  {t("ticket.heldTickets")}
+                </p>
+                <span className="text-xs font-mono text-amber">
+                  {heldTickets.length}
+                </span>
+              </div>
+              <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
+                {heldTickets.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center justify-between px-2.5 py-1.5 rounded-btn bg-obsidian border border-border-subtle"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="font-mono font-semibold text-xs text-text-primary">
+                        {formatTicketNumber(item.number)}
+                      </span>
+                      <span
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full border ${
+                          item.status === "INCOMPLETE"
+                            ? "bg-amber/15 text-amber border-amber/40"
+                            : "bg-rose/15 text-rose border-rose/30"
+                        }`}
+                      >
+                        {t(`ticket.status.${item.status.toLowerCase()}`)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={isLoading}
+                        onClick={() => void returnToQueue(item)}
+                        className="btn-ghost text-[11px] py-1 px-2 border border-border-subtle flex items-center gap-1"
+                        title={t("ticket.requeue")}
+                      >
+                        <RotateCcw size={11} />
+                        <span>{t("ticket.requeueShort")}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isLoading}
+                        onClick={() => void closeHeldTicket(item.id)}
+                        className="btn-ghost p-1 text-rose/70 hover:text-rose"
+                        title={t("ticket.closeTicket")}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -406,6 +495,8 @@ export function AgentDashboard() {
       <ShortcutsHelp />
       {/* Modale de transfert */}
       <TransferModal />
+      {/* Modale de recherche / scan QR / priorité */}
+      <TicketLookupModal />
     </AgentLayout>
   );
 }
