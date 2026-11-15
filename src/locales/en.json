@@ -27,6 +27,8 @@
     "pause": "Pause",
     "resume": "Resume",
     "pausedHint": "No more customers are called at this counter.",
+    "assigned": "Assigned",
+    "notAssigned": "Assigned to another counter",
     "status": {
       "open": "Open",
       "paused": "Paused",
@@ -45,6 +47,7 @@
   },
   "ticket": {
     "callNext": "Call next",
+    "startServing": "Start serving",
     "recall": "Recall",
     "markAbsent": "Absent",
     "transfer": "Transfer",
@@ -90,6 +93,7 @@
     "dismiss": "Dismiss",
     "actions": {
       "CALL_TICKET": "Ticket call",
+      "START_SERVING": "Service start",
       "RECALL_TICKET": "Ticket recall",
       "MARK_ABSENT": "Customer absent",
       "COMPLETE_TICKET": "Ticket completed",

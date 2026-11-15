@@ -200,6 +200,9 @@ class WebSocketManager {
   private _scheduleReconnect(): void {
     if (this.retryCount >= MAX_RETRIES) {
       console.warn("[WS] Max retries reached. Staying in polling fallback.");
+      if (useOfflineStore.getState().isOnline) {
+        useOfflineStore.getState().setConnectionStatus("CONNECTED");
+      }
       return;
     }
 
@@ -254,6 +257,10 @@ class WebSocketManager {
     try {
       const { loadQueues } = useQueueStore.getState();
       await loadQueues(this.branchId);
+      const offline = useOfflineStore.getState();
+      if (offline.isOnline && offline.connectionStatus === "RECONNECTING") {
+        offline.setConnectionStatus("CONNECTED");
+      }
     } catch {
       // Still offline — polling will retry
     }

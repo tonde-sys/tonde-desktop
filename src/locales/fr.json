@@ -27,6 +27,8 @@
     "pause": "Mettre en pause",
     "resume": "Reprendre",
     "pausedHint": "Les clients ne sont plus appelés sur ce guichet.",
+    "assigned": "Attribué",
+    "notAssigned": "Attribué à un autre poste",
     "status": {
       "open": "Ouvert",
       "paused": "En pause",
@@ -45,6 +47,7 @@
   },
   "ticket": {
     "callNext": "Appeler suivant",
+    "startServing": "Démarrer le service",
     "recall": "Rappeler",
     "markAbsent": "Absent",
     "transfer": "Transférer",
@@ -90,6 +93,7 @@
     "dismiss": "Ignorer",
     "actions": {
       "CALL_TICKET": "Appel de ticket",
+      "START_SERVING": "Début de service",
       "RECALL_TICKET": "Rappel de ticket",
       "MARK_ABSENT": "Client absent",
       "COMPLETE_TICKET": "Ticket terminé",

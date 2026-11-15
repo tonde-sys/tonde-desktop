@@ -4,7 +4,7 @@
 // Sprint 0 : squelette avec zones définies
 // ============================================================
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AgentLayout } from "../components/layout/AgentLayout";
 import { ShortcutsHelp } from "../components/shortcuts/ShortcutsHelp";
@@ -19,7 +19,7 @@ import { useAgentShortcuts } from "../hooks/useKeyboardShortcuts";
 import { wsManager } from "../lib/WebSocketManager";
 import { IS_MOCK_MODE } from "../config/api";
 import { preloadSounds } from "../utils/sound";
-import { formatTicketNumber } from "../utils/formatters";
+import { formatDuration, formatTicketNumber } from "../utils/formatters";
 import {
   Phone,
   UserX,
@@ -29,6 +29,7 @@ import {
   Loader2,
   Inbox,
   Play,
+  Clock,
 } from "lucide-react";
 
 export function AgentDashboard() {
@@ -37,11 +38,41 @@ export function AgentDashboard() {
   const myCounter = useCounterStore((s) => s.myCounter);
   const pauseCounter = useCounterStore((s) => s.pauseCounter);
   const resumeCounter = useCounterStore((s) => s.resumeCounter);
-  const { currentTicket, isLoading, callNext, markAbsent, recall, complete } =
-    useTicketStore();
+  const {
+    currentTicket,
+    processingStartedAt,
+    isLoading,
+    callNext,
+    startServing,
+    markAbsent,
+    recall,
+    complete,
+  } = useTicketStore();
   const isOnline = useOfflineStore((s) => s.isOnline);
-  const { queues, loadQueues } = useQueueStore();
+  const { queues, services, loadQueues } = useQueueStore();
   const { openTransferModal, openShortcutsHelp, closeAllDialogs } = useAppStore();
+  const [nowMs, setNowMs] = useState(() => Date.now());
+
+  const timerAnchor =
+    processingStartedAt ??
+    currentTicket?.served_at ??
+    currentTicket?.called_at;
+
+  // Horloge temps réel tant qu'un ticket est actif
+  useEffect(() => {
+    if (!currentTicket || !timerAnchor) return;
+    const interval = setInterval(() => {
+      setNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [currentTicket, timerAnchor]);
+
+  const elapsedSeconds = (() => {
+    if (!currentTicket || !timerAnchor) return 0;
+    const startMs = Date.parse(timerAnchor);
+    if (Number.isNaN(startMs)) return 0;
+    return Math.max(0, Math.floor((nowMs - startMs) / 1000));
+  })();
 
   // Préchargement sons au montage
   useEffect(() => {
@@ -106,20 +137,32 @@ export function AgentDashboard() {
     void callNext(myCounter.id, serviceIds);
   };
 
+  const handleStartServing = () => {
+    if (!currentTicket || !myCounter) return;
+    void startServing(currentTicket.id, myCounter.id);
+  };
+
   const handleMarkAbsent = () => {
     if (!currentTicket || !myCounter) return;
-    markAbsent(currentTicket.id, myCounter.id);
+    void markAbsent(currentTicket.id, myCounter.id);
   };
 
   const handleRecall = () => {
     if (!myCounter) return;
-    recall(myCounter.id);
+    void recall(myCounter.id);
   };
 
   const handleComplete = () => {
     if (!currentTicket || !myCounter) return;
-    complete(currentTicket.id, myCounter.id);
+    void complete(currentTicket.id, myCounter.id);
   };
+
+  const currentServiceName = currentTicket
+    ? (queues.find((q) => q.service_id === currentTicket.service_id)
+        ?.service_name ??
+      services.find((s) => s.id === currentTicket.service_id)?.name ??
+      null)
+    : null;
 
   const handlePauseToggle = () => {
     if (!myCounter) return;
@@ -158,40 +201,75 @@ export function AgentDashboard() {
 
           {currentTicket ? (
             <>
-              {/* Numéro ticket géant */}
+              {/* Numéro ticket géant + service + priorité + chronomètre */}
               <div className="text-center">
-                <p className="text-text-muted text-sm uppercase tracking-widest mb-2">
-                  {t("ticket.currentTicket")}
-                </p>
-                <p className="font-mono font-bold text-cyan leading-none"
-                   style={{ fontSize: "120px" }}>
+                <div className="flex items-center justify-center gap-2 mb-2">
+                  <p className="text-text-muted text-sm uppercase tracking-widest">
+                    {t("ticket.currentTicket")}
+                  </p>
+                  {currentTicket.priority > 0 && (
+                    <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber/15 text-amber border border-amber/40">
+                      {t("ticket.priority")}
+                    </span>
+                  )}
+                </div>
+                <p
+                  className="font-mono font-bold text-cyan leading-none"
+                  style={{ fontSize: "120px" }}
+                >
                   {formatTicketNumber(currentTicket.number)}
                 </p>
-                <p className="text-text-secondary text-sm mt-2">
-                  {t(`ticket.status.${currentTicket.status.toLowerCase()}`)}
-                </p>
+                {currentServiceName && (
+                  <p className="text-text-primary font-medium text-base mt-3">
+                    {currentServiceName}
+                  </p>
+                )}
+                <div className="flex items-center justify-center gap-2 text-text-secondary text-sm mt-2">
+                  <span>
+                    {t(`ticket.status.${currentTicket.status.toLowerCase()}`)}
+                  </span>
+                  <span>·</span>
+                  <span className="inline-flex items-center gap-1 font-mono text-xs text-text-muted">
+                    <Clock size={12} />
+                    {formatDuration(elapsedSeconds)}
+                  </span>
+                </div>
               </div>
 
               {/* Actions sur le ticket en cours */}
               <div className="flex flex-wrap gap-3 justify-center">
-                <button
-                  onClick={handleComplete}
-                  disabled={isLoading}
-                  className="btn-primary flex items-center gap-2"
-                >
-                  <CheckSquare size={16} />
-                  {t("ticket.complete")}
-                  <span className="kbd kbd-inverse">{t("common.enter")}</span>
-                </button>
-                <button
-                  onClick={handleMarkAbsent}
-                  disabled={isLoading}
-                  className="btn-danger flex items-center gap-2"
-                >
-                  <UserX size={16} />
-                  {t("ticket.markAbsent")}
-                  <span className="kbd kbd-inverse">A</span>
-                </button>
+                {currentTicket.status === "CALLED" ? (
+                  <button
+                    onClick={handleStartServing}
+                    disabled={isLoading}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <Play size={16} />
+                    {t("ticket.startServing")}
+                    <span className="kbd kbd-inverse">{t("common.enter")}</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleComplete}
+                    disabled={isLoading}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <CheckSquare size={16} />
+                    {t("ticket.complete")}
+                    <span className="kbd kbd-inverse">{t("common.enter")}</span>
+                  </button>
+                )}
+                {currentTicket.status === "CALLED" && (
+                  <button
+                    onClick={handleMarkAbsent}
+                    disabled={isLoading}
+                    className="btn-danger flex items-center gap-2"
+                  >
+                    <UserX size={16} />
+                    {t("ticket.markAbsent")}
+                    <span className="kbd kbd-inverse">A</span>
+                  </button>
+                )}
                 <button
                   onClick={() => openTransferModal()}
                   disabled={isLoading}

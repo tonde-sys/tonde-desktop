@@ -19,8 +19,10 @@ export interface Ticket {
   number: string;
   status: TicketStatus;
   priority: TicketPriority;
+  requested_priority?: TicketPriority;
   created_at: string;
   called_at?: string;
+  served_at?: string;
   closed_at?: string;
   service_id: string;
   branch_id: string;
@@ -156,6 +158,7 @@ export interface AgentMessagePayload {
 
 export type SyncActionType =
   | "CALL_TICKET"
+  | "START_SERVING"
   | "RECALL_TICKET"
   | "MARK_ABSENT"
   | "COMPLETE_TICKET"

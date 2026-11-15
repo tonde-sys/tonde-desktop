@@ -4,7 +4,7 @@
 // + configuration du poste (organisation / agence)
 // ============================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../store/authStore";
 import { useCounterStore } from "../store/counterStore";
@@ -12,7 +12,7 @@ import {
   getApiContext,
   hasApiContext,
 } from "../services/api/apiService";
-import { Monitor, Loader2, ChevronRight, Settings2 } from "lucide-react";
+import { Monitor, Loader2, ChevronRight, Settings2, Lock } from "lucide-react";
 
 interface CounterSelectPageProps {
   onCounterSelected: () => void;
@@ -24,13 +24,28 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
   const applyContext = useAuthStore((s) => s.applyContext);
   const { allCounters, isLoading, loadAllCounters, openCounter } = useCounterStore();
 
-  const [contextReady, setContextReady] = useState(() => hasApiContext());
+  const [manualContextReady, setManualContextReady] = useState(false);
   const [editingContext, setEditingContext] = useState(false);
   const [orgInput, setOrgInput] = useState(() => getApiContext()?.orgId ?? "");
   const [branchInput, setBranchInput] = useState(() => getApiContext()?.branchId ?? "");
   const [setupError, setSetupError] = useState<string | null>(null);
 
+  const contextReady = manualContextReady || hasApiContext() || Boolean(user?.branch_id);
   const branchId = user?.branch_id || getApiContext()?.branchId || "";
+  const assignedCounterId = user?.counter_id;
+  const restrictToAssigned =
+    user?.role === "Agent" &&
+    Boolean(assignedCounterId) &&
+    allCounters.some((c) => c.id === assignedCounterId);
+
+  const sortedCounters = useMemo(() => {
+    if (!assignedCounterId) return allCounters;
+    return [...allCounters].sort((a, b) => {
+      if (a.id === assignedCounterId) return -1;
+      if (b.id === assignedCounterId) return 1;
+      return 0;
+    });
+  }, [allCounters, assignedCounterId]);
 
   useEffect(() => {
     if (contextReady && branchId) {
@@ -40,8 +55,10 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
 
   const handleSelect = async (counterId: string) => {
     if (!user) return;
-    await openCounter(counterId, user.id);
-    onCounterSelected();
+    const opened = await openCounter(counterId, user.id);
+    if (opened) {
+      onCounterSelected();
+    }
   };
 
   const openContextForm = () => {
@@ -62,7 +79,7 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
     }
     setSetupError(null);
     applyContext(orgId, newBranchId);
-    setContextReady(true);
+    setManualContextReady(true);
     setEditingContext(false);
   };
 
@@ -159,30 +176,52 @@ export function CounterSelectPage({ onCounterSelected }: CounterSelectPageProps)
           </div>
         ) : (
           <div className="flex flex-col gap-2">
-            {allCounters.map((counter) => (
-              <button
-                key={counter.id}
-                onClick={() => handleSelect(counter.id)}
-                disabled={isLoading}
-                className="card flex items-center justify-between hover:border-violet/50
-                  hover:bg-ink/80 transition-all duration-200 group text-left
-                  disabled:opacity-60 disabled:cursor-wait"
-              >
-                <div>
-                  <p className="text-text-primary font-medium">{counter.name}</p>
-                  <p className="text-text-muted text-xs mt-0.5">
-                    {counter.status === "OPEN"
-                      ? t("counter.status.open")
-                      : t("counter.status.closed")}
-                    {counter.description ? ` · ${counter.description}` : ""}
-                  </p>
-                </div>
-                <ChevronRight
-                  size={18}
-                  className="text-text-muted group-hover:text-violet transition-colors"
-                />
-              </button>
-            ))}
+            {sortedCounters.map((counter) => {
+              const isAssigned = assignedCounterId === counter.id;
+              const isLocked = restrictToAssigned && !isAssigned;
+
+              return (
+                <button
+                  key={counter.id}
+                  onClick={() => handleSelect(counter.id)}
+                  disabled={isLoading || isLocked}
+                  className={`card flex items-center justify-between transition-all duration-200 group text-left ${
+                    isAssigned
+                      ? "border-violet/60 bg-violet/10 hover:border-violet"
+                      : "hover:border-violet/50 hover:bg-ink/80"
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <p className="text-text-primary font-medium">
+                        {counter.name}
+                      </p>
+                      {isAssigned && (
+                        <span className="px-2 py-0.5 rounded-full text-[11px] font-medium bg-violet/20 text-violet border border-violet/40">
+                          {t("counter.assigned")}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-text-muted text-xs mt-0.5">
+                      {isLocked
+                        ? t("counter.notAssigned")
+                        : counter.status === "OPEN"
+                          ? t("counter.status.open")
+                          : t("counter.status.closed")}
+                      {counter.description ? ` · ${counter.description}` : ""}
+                    </p>
+                  </div>
+                  {isLocked ? (
+                    <Lock size={16} className="text-text-muted" />
+                  ) : (
+                    <ChevronRight
+                      size={18}
+                      className="text-text-muted group-hover:text-violet transition-colors"
+                    />
+                  )}
+                </button>
+              );
+            })}
           </div>
         )}
 

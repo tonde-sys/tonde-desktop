@@ -23,7 +23,7 @@ interface CounterState {
   pauseCounter: (counterId: string) => Promise<void>;
   resumeCounter: (counterId: string) => Promise<void>;
   closeCounter: (counterId: string) => Promise<void>;
-  openCounter: (counterId: string, agentId: string) => Promise<void>;
+  openCounter: (counterId: string, agentId: string) => Promise<boolean>;
   updateCounterFromWS: (counter: Counter) => void;
   getCountersByService: (serviceId: string) => Counter[];
   reset: () => void;
@@ -173,7 +173,7 @@ export const useCounterStore = create<CounterState>()(
                 "Ouverture du guichet impossible",
                 err instanceof Error ? err.message : undefined
               );
-              return;
+              return false;
             }
           } else {
             // Hors-ligne : ouverture locale, rejouée à la reconnexion.
@@ -205,6 +205,7 @@ export const useCounterStore = create<CounterState>()(
               : c
           ),
         }));
+        return true;
       },
 
       updateCounterFromWS: (counter) =>

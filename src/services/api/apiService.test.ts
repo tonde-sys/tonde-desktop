@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { API_BASE_URL, API_PREFIX } from "../../config/api";
-import { ApiError, httpClient } from "./apiService";
+import {
+  ApiError,
+  apiService,
+  getApiContext,
+  httpClient,
+  setApiContext,
+} from "./apiService";
 
 function mockResponse(payload: unknown, status = 200): Response {
   return {
@@ -198,5 +204,121 @@ describe("httpClient", () => {
 
     await expect(httpClient.get("/tickets/ticket-1")).rejects.toBeInstanceOf(ApiError);
     expect(unauthorizedHandler).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("apiService — contexte staff & cycle de vie ticket", () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    setApiContext(null);
+    httpClient.clearToken();
+  });
+
+  afterEach(() => {
+    setApiContext(null);
+    vi.unstubAllGlobals();
+  });
+
+  it("déduit automatiquement orgId, branchId et counter_id depuis user.memberships au login", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        access_token: "access-token",
+        refresh_token: "refresh-token",
+        user: {
+          id: "u-agent-1",
+          name: "Agent Guichet",
+          email: "agent@banque.bi",
+          role: "agent",
+          language: "fr",
+          is_verified: true,
+          org_id: "org-123",
+          memberships: [
+            {
+              employee_id: "emp-1",
+              org_id: "org-123",
+              branch_id: "branch-456",
+              counter_id: "counter-789",
+              role: "agent",
+              status: "active",
+            },
+          ],
+        },
+      })
+    );
+
+    const user = await apiService.login({
+      email: "agent@banque.bi",
+      password: "secret",
+    });
+
+    expect(getApiContext()).toEqual({
+      orgId: "org-123",
+      branchId: "branch-456",
+    });
+    expect(user.branch_id).toBe("branch-456");
+    expect(user.counter_id).toBe("counter-789");
+  });
+
+  it("mappe séparément called_at, served_at et closed_at depuis GET /tickets/{id}", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        success: true,
+        data: {
+          id: "t-1",
+          number: "A-042",
+          status: "serving",
+          priority: "priority",
+          requested_priority: "vip",
+          agency_id: "branch-456",
+          service_id: "svc-1",
+          created_at: "2026-11-15T08:00:00Z",
+          called_at: "2026-11-15T08:05:00Z",
+          served_at: "2026-11-15T08:06:15Z",
+          done_at: null,
+          counter_name: "Guichet 1",
+        },
+      })
+    );
+
+    const ticket = await apiService.getTicket("t-1");
+
+    expect(ticket).toMatchObject({
+      id: "t-1",
+      number: "A-042",
+      status: "PROCESSING",
+      priority: 1,
+      requested_priority: 2,
+      called_at: "2026-11-15T08:05:00Z",
+      served_at: "2026-11-15T08:06:15Z",
+      closed_at: undefined,
+    });
+  });
+
+  it("startServingTicket appelle POST /tickets/{id}/serving et tolère INVALID_TRANSITION en rejeu", async () => {
+    fetchMock
+      .mockResolvedValueOnce(mockResponse({ success: true, ticket_id: "t-1" }))
+      .mockResolvedValueOnce(
+        mockResponse(
+          {
+            detail: {
+              code: "INVALID_TRANSITION",
+              message: "Déjà en service",
+            },
+          },
+          400
+        )
+      );
+
+    await expect(
+      apiService.startServingTicket("t-1", "counter-1")
+    ).resolves.toBeUndefined();
+    await expect(
+      apiService.startServingTicket("t-1", "counter-1")
+    ).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

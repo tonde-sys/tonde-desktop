@@ -11,6 +11,7 @@ import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../store/authStore";
 import { API_HOST, IS_MOCK_MODE } from "../config/api";
 import { Eye, EyeOff, LogIn } from "lucide-react";
+import pkg from "../../package.json";
 
 const loginSchema = z.object({
   email: z.string().email("Email invalide"),
@@ -136,7 +137,7 @@ export function LoginPage() {
 
       {/* Version + serveur */}
       <p className="mt-8 text-text-muted text-xs text-center">
-        v0.1.0
+        v{pkg.version}
         <span className="block mt-1">
           {IS_MOCK_MODE
             ? t("auth.mockServer")

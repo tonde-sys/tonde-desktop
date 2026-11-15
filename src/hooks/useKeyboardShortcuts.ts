@@ -141,8 +141,14 @@ export function useAgentShortcuts(options: {
   onOpenHelp: () => void;
   onCloseDialog: () => void;
 }) {
-  const { callNext, recall, complete, markAbsent, currentTicket } =
-    useTicketStore();
+  const {
+    callNext,
+    startServing,
+    recall,
+    complete,
+    markAbsent,
+    currentTicket,
+  } = useTicketStore();
   const { myCounter, pauseCounter, resumeCounter } = useCounterStore();
   const { user } = useAuthStore();
 
@@ -163,11 +169,16 @@ export function useAgentShortcuts(options: {
 
     onComplete: () => {
       if (!currentTicket || !myCounter) return;
-      void complete(currentTicket.id, myCounter.id);
+      if (currentTicket.status === "CALLED") {
+        void startServing(currentTicket.id, myCounter.id);
+      } else {
+        void complete(currentTicket.id, myCounter.id);
+      }
     },
 
     onMarkAbsent: () => {
       if (!currentTicket || !myCounter) return;
+      if (currentTicket.status !== "CALLED") return;
       void markAbsent(currentTicket.id, myCounter.id);
     },
 
@@ -210,7 +221,11 @@ export function useShortcutAvailability() {
     !isLoading && !!myCounter && myCounter.status === "OPEN" && !currentTicket;
 
   const canRecall = IS_MOCK_MODE && !isLoading && !!currentTicket && !!myCounter;
-  const canMarkAbsent = !isLoading && !!currentTicket && !!myCounter;
+  const canMarkAbsent =
+    !isLoading &&
+    !!currentTicket &&
+    currentTicket.status === "CALLED" &&
+    !!myCounter;
   const canTransfer = !isLoading && !!currentTicket;
   const canPause = !!myCounter && myCounter.status !== "CLOSED";
 

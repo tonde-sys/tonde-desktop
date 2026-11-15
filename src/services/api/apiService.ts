@@ -67,6 +67,7 @@ const mockApi = {
         role: "Agent",
         branch_id: MOCK_BRANCH_ID,
         branch_name: MOCK_BRANCH_NAME,
+        counter_id: "counter-001",
         token: "mock-jwt-token-" + Date.now(),
         refresh_token: "mock-refresh-token-" + Date.now(),
         token_expires_at: new Date(Date.now() + 86400000).toISOString(),
@@ -131,6 +132,15 @@ const mockApi = {
     if (ticket) {
       ticket.status = "ABSENT";
       ticket.closed_at = new Date().toISOString();
+    }
+  },
+
+  async startServingTicket(ticketId: string, _counterId: string): Promise<void> {
+    await delay(150);
+    const ticket = mockTickets.find(t => t.id === ticketId);
+    if (ticket) {
+      ticket.status = "PROCESSING";
+      ticket.served_at = new Date().toISOString();
     }
   },
 
@@ -606,6 +616,7 @@ interface BackendTicket {
   number: string;
   status: string;
   priority: string;
+  requested_priority?: string | null;
   agency_id: string;
   service_id: string;
   created_at: string;
@@ -723,18 +734,22 @@ function mapTicketPriority(priority: string): Ticket["priority"] {
 }
 
 function mapTicket(dto: BackendTicket): Ticket {
-  const realStart = dto.served_at ?? dto.called_at ?? undefined;
+  const realCalledAt = dto.called_at ?? dto.served_at ?? undefined;
   return {
     id: dto.id,
     number: dto.number,
     status: TICKET_STATUS_MAP[dto.status] ?? "WAITING",
     priority: mapTicketPriority(dto.priority),
+    requested_priority: dto.requested_priority
+      ? mapTicketPriority(dto.requested_priority)
+      : undefined,
     created_at: dto.created_at,
     called_at:
-      realStart ??
+      realCalledAt ??
       (dto.status === "called" || dto.status === "serving"
         ? new Date().toISOString()
         : undefined),
+    served_at: dto.served_at ?? undefined,
     closed_at: dto.done_at ?? undefined,
     service_id: dto.service_id,
     branch_id: dto.agency_id,
@@ -1098,6 +1113,17 @@ export const apiService = {
       await httpClient.post(`/tickets/${ticketId}/absent`);
     } catch (err) {
       // Rejeu après coupure : le ticket peut déjà être absent ou clos.
+      if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
+        throw err;
+      }
+    }
+  },
+
+  async startServingTicket(ticketId: string, _counterId: string): Promise<void> {
+    if (apiImpl) return apiImpl.startServingTicket(ticketId, _counterId);
+    try {
+      await httpClient.post(`/tickets/${ticketId}/serving`);
+    } catch (err) {
       if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
         throw err;
       }

@@ -24,6 +24,7 @@ interface TicketState {
 
   // Core Agent Actions
   callNext: (counterId: string, serviceIds: string[]) => Promise<void>;
+  startServing: (ticketId: string, counterId: string) => Promise<void>;
   recall: (counterId: string) => Promise<void>;
   markAbsent: (ticketId: string, counterId: string) => Promise<void>;
   complete: (ticketId: string, counterId: string) => Promise<void>;
@@ -120,7 +121,7 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       await db.upsertTicket(ticket);
       set({
         currentTicket: ticket,
-        processingStartedAt: nowIso(),
+        processingStartedAt: ticket.served_at ?? ticket.called_at ?? nowIso(),
         error: null,
       });
       void playCallSound();
@@ -134,7 +135,8 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
           await db.upsertTicket(adopted);
           set({
             currentTicket: adopted,
-            processingStartedAt: nowIso(),
+            processingStartedAt:
+              adopted.served_at ?? adopted.called_at ?? nowIso(),
             error: null,
           });
           void playCallSound();
@@ -181,6 +183,77 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         error: errorMessage(err),
       });
       notify("error", "Appel impossible", errorMessage(err));
+    } finally {
+      set({ isLoading: false });
+    }
+  },
+
+  startServing: async (ticketId, counterId) => {
+    const ticket = get().currentTicket;
+    if (!ticket || ticket.id !== ticketId || get().isLoading) {
+      if (!ticket) notify("warning", "Aucun ticket en cours");
+      return;
+    }
+    if (!canTransition(ticket.status, "PROCESSING")) {
+      notify(
+        "warning",
+        "Action impossible",
+        `Le ticket ${ticket.number} est au statut ${ticket.status}.`
+      );
+      return;
+    }
+
+    const previousStartedAt = get().processingStartedAt;
+    const servedAt = nowIso();
+    const servingTicket: Ticket = {
+      ...ticket,
+      status: "PROCESSING",
+      served_at: servedAt,
+    };
+
+    set({
+      isLoading: true,
+      error: null,
+      currentTicket: servingTicket,
+      processingStartedAt: servedAt,
+    });
+
+    const saveInOutbox = async (): Promise<void> => {
+      await db.upsertTicket(servingTicket);
+      await useOfflineStore.getState().enqueue("START_SERVING", {
+        ticket_id: ticketId,
+        counter_id: counterId,
+      });
+    };
+
+    try {
+      if (useOfflineStore.getState().isOnline) {
+        try {
+          await apiService.startServingTicket(ticketId, counterId);
+          await db.upsertTicket(servingTicket);
+          refreshQueues();
+          return;
+        } catch (err) {
+          if (isNetworkFailure(err)) {
+            useOfflineStore.getState().setOnline(false);
+          } else if (!isTimeoutFailure(err)) {
+            throw err;
+          }
+        }
+      }
+
+      await saveInOutbox();
+      notify(
+        "warning",
+        "Prise en charge enregistrée",
+        "Synchronisation automatique en attente."
+      );
+    } catch (err) {
+      set({
+        currentTicket: ticket,
+        processingStartedAt: previousStartedAt,
+      });
+      notify("error", "Prise en charge impossible", errorMessage(err));
     } finally {
       set({ isLoading: false });
     }
@@ -460,7 +533,9 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
   setCurrentTicket: (ticket) =>
     set({
       currentTicket: ticket,
-      processingStartedAt: ticket ? nowIso() : null,
+      processingStartedAt: ticket
+        ? ticket.served_at ?? ticket.called_at ?? nowIso()
+        : null,
     }),
 
   restoreCurrentTicket: async (ticketId) => {
@@ -472,7 +547,8 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       await db.upsertTicket(ticket);
       set({
         currentTicket: ticket,
-        processingStartedAt: ticket.called_at ?? nowIso(),
+        processingStartedAt:
+          ticket.served_at ?? ticket.called_at ?? nowIso(),
       });
     } catch {
       // Reprise best-effort : une file vide prendra le relais.

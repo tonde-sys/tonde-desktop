@@ -245,6 +245,9 @@ async function dispatchSyncAction(item: SyncQueueItem): Promise<void> {
     case "CALL_TICKET":
       await apiService.callTicketById(p.ticket_id as string, p.counter_id as string);
       break;
+    case "START_SERVING":
+      await apiService.startServingTicket(p.ticket_id as string, p.counter_id as string);
+      break;
     case "RECALL_TICKET":
       await apiService.recallTicket(p.ticket_id as string, p.counter_id as string);
       break;

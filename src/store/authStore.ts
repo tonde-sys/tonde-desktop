@@ -130,11 +130,35 @@ export const useAuthStore = create<AuthState>()(
               }
             }
 
-            const restoredBranch =
-              persistedUser.branch_id || context?.branchId || "";
+            const hydrated = await apiService.hydrateSessionContext(
+              persistedUser.role
+            );
+            const currentUser = get().user;
+            const resolvedBranch =
+              hydrated?.branchId ||
+              currentUser?.branch_id ||
+              getApiContext()?.branchId ||
+              "";
+            const resolvedCounter =
+              hydrated?.counterId ?? currentUser?.counter_id;
+
+            if (
+              currentUser &&
+              (resolvedBranch !== currentUser.branch_id ||
+                resolvedCounter !== currentUser.counter_id)
+            ) {
+              set({
+                user: {
+                  ...currentUser,
+                  branch_id: resolvedBranch,
+                  counter_id: resolvedCounter,
+                },
+              });
+            }
+
             useOfflineStore.getState().setActor({
               userId: persistedUser.id,
-              branchId: restoredBranch,
+              branchId: resolvedBranch,
             });
           } else {
             if (bundle?.accessToken) {
@@ -171,6 +195,7 @@ export const useAuthStore = create<AuthState>()(
             role: user.role,
             is_active: true,
             branch_id: user.branch_id,
+            counter_id: user.counter_id,
           });
 
           set({

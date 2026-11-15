@@ -79,7 +79,7 @@ export const db = {
   // ---- Employees ----
 
   async upsertEmployee(
-    employee: Omit<Employee, "counter_id" | "avatar_url">
+    employee: Omit<Employee, "avatar_url">
   ): Promise<void> {
     await safeInvoke<void>("db_upsert_employee", { employee }, undefined);
   },
