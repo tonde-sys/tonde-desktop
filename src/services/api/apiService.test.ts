@@ -298,6 +298,23 @@ describe("apiService — contexte staff & cycle de vie ticket", () => {
     });
   });
 
+  it("recallTicket poste sur le endpoint de relance et retourne recalls_left", async () => {
+    fetchMock.mockResolvedValue(
+      mockResponse({ success: true, data: { recalls_left: 1 } })
+    );
+
+    await expect(apiService.recallTicket("t-1", "counter-1")).resolves.toEqual({
+      recalls_left: 1,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      `${API_BASE_URL}${API_PREFIX}/tickets/t-1/recall`,
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({ "Content-Type": "application/json" }),
+      })
+    );
+  });
+
   it("startServingTicket appelle POST /tickets/{id}/serving et tolère INVALID_TRANSITION en rejeu", async () => {
     fetchMock
       .mockResolvedValueOnce(mockResponse({ success: true, ticket_id: "t-1" }))
@@ -345,9 +362,14 @@ describe("apiService — contexte staff & cycle de vie ticket", () => {
       apiService.markTicketIncomplete("t-1", "counter-1", "Pièce manquante")
     ).resolves.toBeUndefined();
     await expect(apiService.requeueTicket("t-1")).resolves.toBeUndefined();
-    await expect(
-      apiService.returnTicketToQueue("t-2")
-    ).resolves.toBeUndefined();
+    // `returnTicketToQueue` renvoie désormais la réponse du serveur : position
+    // réelle et `queue_degraded`. C'est ce qui permet d'avertir l'agent quand le
+    // ticket est revenu en base mais pas encore dans la file Redis.
+    await expect(apiService.returnTicketToQueue("t-2")).resolves.toEqual({
+      success: true,
+      ticket_id: "t-2",
+      position: 2,
+    });
     await expect(
       apiService.closeTicket("t-3", "Abandon")
     ).resolves.toBeUndefined();

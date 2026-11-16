@@ -10,7 +10,7 @@ import { useTicketStore } from "../store/ticketStore";
 import { useCounterStore } from "../store/counterStore";
 import { useAuthStore } from "../store/authStore";
 import { useAppStore } from "../store/app.store";
-import { IS_MOCK_MODE } from "../config/api";
+import { canMarkAbsent as isAbsenceAllowed } from "../utils/absence";
 
 export interface ShortcutHandlers {
   onCallNext?: () => void;
@@ -176,12 +176,12 @@ export function useAgentShortcuts(options: {
       void callNext(myCounter.id, myCounter.service_ids);
     },
 
-    onRecall: IS_MOCK_MODE
-      ? () => {
-          if (!currentTicket || !myCounter) return;
-          void recall(myCounter.id);
-        }
-      : undefined,
+    onRecall: () => {
+      if (!currentTicket || currentTicket.status !== "CALLED" || !myCounter) return;
+      const lastRecall = useTicketStore.getState().lastRecall;
+      if (lastRecall?.ticketId === currentTicket.id && lastRecall.recallsLeft === 0) return;
+      void recall(myCounter.id);
+    },
 
     onComplete: () => {
       if (!currentTicket || !myCounter) return;
@@ -194,7 +194,8 @@ export function useAgentShortcuts(options: {
 
     onMarkAbsent: () => {
       if (!currentTicket || !myCounter) return;
-      if (currentTicket.status !== "CALLED") return;
+      // Même garde que le bouton : le clavier ne doit pas contourner la grâce.
+      if (!isAbsenceAllowed(currentTicket)) return;
       void markAbsent(currentTicket.id, myCounter.id);
     },
 
@@ -246,12 +247,14 @@ export function useShortcutAvailability() {
   const canCallNext =
     !isLoading && !!myCounter && myCounter.status === "OPEN" && !currentTicket;
 
-  const canRecall = IS_MOCK_MODE && !isLoading && !!currentTicket && !!myCounter;
+  const canRecall = !isLoading && currentTicket?.status === "CALLED" && !!myCounter;
+  // Le raccourci clavier applique la MÊME règle que le bouton : sans cela, la
+  // touche A contournerait le délai de grâce que le bouton respecte.
   const canMarkAbsent =
     !isLoading &&
     !!currentTicket &&
-    currentTicket.status === "CALLED" &&
-    !!myCounter;
+    !!myCounter &&
+    isAbsenceAllowed(currentTicket);
   const canTransfer = !isLoading && !!currentTicket;
   const canPause = !!myCounter && myCounter.status !== "CLOSED";
 

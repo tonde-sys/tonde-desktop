@@ -122,17 +122,20 @@ const mockApi = {
     return ticket;
   },
 
-  async recallTicket(_ticketId: string, _counterId: string): Promise<void> {
+  async recallTicket(_ticketId: string, _counterId: string): Promise<{ recalls_left: number }> {
     await delay(200);
+    return { recalls_left: 2 };
   },
 
-  async markTicketAbsent(ticketId: string, _counterId: string): Promise<void> {
+  async markTicketAbsent(ticketId: string, _counterId: string): Promise<AbsenceResult> {
     await delay(200);
     const ticket = mockTickets.find(t => t.id === ticketId);
     if (ticket) {
       ticket.status = "ABSENT";
       ticket.closed_at = new Date().toISOString();
+      ticket.missed_count = (ticket.missed_count ?? 0) + 1;
     }
+    return { missed_count: ticket?.missed_count ?? 1, recovery_allowed: true };
   },
 
   async startServingTicket(ticketId: string, _counterId: string): Promise<void> {
@@ -156,7 +159,7 @@ const mockApi = {
     }
   },
 
-  async returnTicketToQueue(ticketId: string): Promise<void> {
+  async returnTicketToQueue(ticketId: string): Promise<RequeueResult> {
     await delay(200);
     const ticket = mockTickets.find((t) => t.id === ticketId);
     if (ticket) {
@@ -165,6 +168,7 @@ const mockApi = {
       ticket.served_at = undefined;
       ticket.closed_at = undefined;
     }
+    return { position: 1, queue_degraded: false };
   },
 
   async requeueTicket(ticketId: string): Promise<void> {
@@ -352,12 +356,42 @@ function delay(ms: number): Promise<void> {
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
+  /**
+   * Corps d'erreur brut renvoyé par le serveur (`detail` ou `error`).
+   *
+   * Il est conservé ENTIER, et pas seulement `code`/`message`, parce que le
+   * moteur d'absence y met des valeurs dont l'interface a besoin pour agir :
+   * `seconds_left` et `grace_period_seconds` (409 GRACE_PERIOD_NOT_ELAPSED),
+   * `missed_count` et `max_missed_count` (409 MAX_MISSED_COUNT_REACHED),
+   * `recovery_expires_at` (409 RECOVERY_WINDOW_EXPIRED). Les jeter obligeait
+   * l'agent à lire un message générique au lieu de savoir combien de secondes
+   * attendre.
+   */
+  readonly details?: Record<string, unknown>;
 
-  constructor(message: string, status = 0, code?: string) {
+  constructor(
+    message: string,
+    status = 0,
+    code?: string,
+    details?: Record<string, unknown>
+  ) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.details = details;
+  }
+
+  /** Nombre du corps d'erreur, ou undefined s'il est absent ou mal typé. */
+  number(key: string): number | undefined {
+    const value = this.details?.[key];
+    return typeof value === "number" ? value : undefined;
+  }
+
+  /** Chaîne du corps d'erreur, ou undefined. */
+  text(key: string): string | undefined {
+    const value = this.details?.[key];
+    return typeof value === "string" ? value : undefined;
   }
 }
 
@@ -400,6 +434,17 @@ function extractErrorCode(payload: unknown): string | undefined {
   return typeof payload.code === "string" ? payload.code : undefined;
 }
 
+/**
+ * Corps d'erreur complet, pour les valeurs dont l'interface a besoin d'agir
+ * (`seconds_left`, `missed_count`, `recovery_expires_at`…).
+ */
+function extractErrorDetails(payload: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(payload)) return undefined;
+  if (isRecord(payload.detail)) return payload.detail;
+  if (isRecord(payload.error)) return payload.error;
+  return undefined;
+}
+
 function unwrapEnvelope<T>(payload: unknown, status: number): T {
   // Contrat écosystème : { success, data, message }
   if (isRecord(payload) && typeof payload.success === "boolean") {
@@ -407,7 +452,8 @@ function unwrapEnvelope<T>(payload: unknown, status: number): T {
       throw new ApiError(
         extractErrorMessage(payload, "Opération refusée par le serveur"),
         status,
-        extractErrorCode(payload)
+        extractErrorCode(payload),
+        extractErrorDetails(payload)
       );
     }
     // Les réponses d'auth sont plates : { success, access_token, ... }
@@ -532,7 +578,8 @@ class ApiClient {
       throw new ApiError(
         extractErrorMessage(payload, `Erreur serveur (${res.status})`),
         res.status,
-        extractErrorCode(payload)
+        extractErrorCode(payload),
+        extractErrorDetails(payload)
       );
     }
 
@@ -694,6 +741,31 @@ interface BackendCounter {
   current_ticket_id: string | null;
 }
 
+/**
+ * Réponse de `POST /tickets/{id}/absent` (spécification §5.1).
+ *
+ * Le serveur dit ce qu'il a fait, le poste ne le devine pas : combien d'appels
+ * manqués sont consommés, et si le client a encore le droit de revenir.
+ */
+export interface AbsenceResult {
+  missed_count?: number;
+  recovery_allowed?: boolean;
+  recovery_expires_at?: string;
+}
+
+/**
+ * Réponse de `POST /tickets/{id}/return`.
+ *
+ * `queue_degraded` prévient que le ticket est revenu en base mais pas dans la
+ * file Redis : la position annoncée n'existe pas encore.
+ */
+export interface RequeueResult {
+  position?: number;
+  priority?: string;
+  missed_count?: number;
+  queue_degraded?: boolean;
+}
+
 interface BackendTicket {
   id: string;
   number: string;
@@ -707,6 +779,13 @@ interface BackendTicket {
   called_at?: string | null;
   served_at?: string | null;
   done_at?: string | null;
+  // Moteur d'absence et de reprise — déclarés explicitement, sinon `mapTicket`
+  // les jetterait silencieusement (le DTO est la seule source du mapping).
+  grace_expires_at?: string | null;
+  recovery_expires_at?: string | null;
+  missed_count?: number | null;
+  queue_sequence?: number | null;
+  queue_degraded?: boolean | null;
 }
 
 interface BackendService {
@@ -837,6 +916,15 @@ function mapTicket(dto: BackendTicket): Ticket {
     closed_at: dto.done_at ?? undefined,
     service_id: dto.service_id,
     branch_id: dto.agency_id,
+    // Le serveur est la seule autorité sur ces valeurs : on les recopie telles
+    // quelles, sans les recalculer ni leur donner de défaut inventé. Un champ
+    // absent doit rester `undefined` — sinon l'interface croirait, par exemple,
+    // que la grâce est écoulée parce que la date manque.
+    grace_expires_at: dto.grace_expires_at ?? undefined,
+    recovery_expires_at: dto.recovery_expires_at ?? undefined,
+    missed_count: dto.missed_count ?? undefined,
+    queue_sequence: dto.queue_sequence ?? undefined,
+    queue_degraded: dto.queue_degraded ?? undefined,
   };
 }
 
@@ -1182,25 +1270,34 @@ export const apiService = {
     return mapTicket(dto);
   },
 
-  async recallTicket(_ticketId: string, _counterId: string): Promise<void> {
-    if (apiImpl) return apiImpl.recallTicket(_ticketId, _counterId);
-    // Aucun endpoint /recall côté backend : l'action est masquée en mode réel.
-    throw new ApiError(
-      "Le rappel n'est pas disponible avec le backend actuel.",
-      501,
-      "NOT_SUPPORTED"
-    );
+  async recallTicket(
+    ticketId: string,
+    _counterId: string
+  ): Promise<{ recalls_left: number; recall_count?: number; timeout_seconds?: number }> {
+    if (apiImpl) return apiImpl.recallTicket(ticketId, _counterId);
+    // Une relance REPOSE le délai de grâce côté serveur : le poste doit donc
+    // récupérer `timeout_seconds` pour réarmer son compte à rebours, sinon il
+    // croirait la grâce écoulée alors qu'elle vient d'être repoussée.
+    return httpClient.post<{
+      recalls_left: number;
+      recall_count?: number;
+      timeout_seconds?: number;
+    }>(`/tickets/${ticketId}/recall`);
   },
 
-  async markTicketAbsent(ticketId: string, _counterId: string): Promise<void> {
+  async markTicketAbsent(
+    ticketId: string,
+    _counterId: string
+  ): Promise<AbsenceResult> {
     if (apiImpl) return apiImpl.markTicketAbsent(ticketId, _counterId);
     try {
-      await httpClient.post(`/tickets/${ticketId}/absent`);
+      return await httpClient.post<AbsenceResult>(`/tickets/${ticketId}/absent`);
     } catch (err) {
       // Rejeu après coupure : le ticket peut déjà être absent ou clos.
       if (!(err instanceof ApiError && err.code === "INVALID_TRANSITION")) {
         throw err;
       }
+      return {};
     }
   },
 
@@ -1235,9 +1332,9 @@ export const apiService = {
     }
   },
 
-  async returnTicketToQueue(ticketId: string): Promise<void> {
+  async returnTicketToQueue(ticketId: string): Promise<RequeueResult> {
     if (apiImpl) return apiImpl.returnTicketToQueue(ticketId);
-    await httpClient.post(`/tickets/${ticketId}/return`);
+    return httpClient.post<RequeueResult>(`/tickets/${ticketId}/return`);
   },
 
   async requeueTicket(ticketId: string): Promise<void> {

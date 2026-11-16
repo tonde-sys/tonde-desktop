@@ -85,8 +85,17 @@ export const useQueueStore = create<QueueState>()((set, get) => ({
       .flatMap((q) => q.tickets)
       .filter((t) => t.status === "WAITING")
       .sort((a, b) => {
-        // Priority first (2 = highest), then creation time
+        // Priority first (2 = highest), then queue order
         if (b.priority !== a.priority) return b.priority - a.priority;
+        // `queue_sequence` est l'ordre de passage calculé par le serveur
+        // (migration 013). Il est strictement déterministe, alors que
+        // `created_at` ne distingue pas deux tickets créés dans la même
+        // milliseconde — le poste pouvait donc annoncer un « prochain » que le
+        // serveur n'aurait pas appelé. Repli sur `created_at` si le serveur ne
+        // fournit pas encore la séquence.
+        if (a.queue_sequence != null && b.queue_sequence != null) {
+          return a.queue_sequence - b.queue_sequence;
+        }
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       });
     return allWaiting[0];

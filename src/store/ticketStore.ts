@@ -12,6 +12,7 @@ import { useAppStore } from "./app.store";
 import { useQueueStore } from "./queueStore";
 import { useCounterStore } from "./counterStore";
 import { canTransition } from "../utils/ticket-state-machine";
+import { absenceErrorMessage, canMarkAbsent, graceSecondsLeft } from "../utils/absence";
 import { playAlertSound, playCallSound } from "../utils/sound";
 import { db } from "../services/database/db";
 
@@ -20,6 +21,7 @@ interface TicketState {
   processingStartedAt: string | null;
   recentTickets: Ticket[];
   heldTickets: Ticket[];
+  lastRecall: { ticketId: string; recallsLeft: number } | null;
   isLoading: boolean;
   error: string | null;
 
@@ -111,6 +113,7 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
   processingStartedAt: null,
   recentTickets: [],
   heldTickets: [],
+  lastRecall: null,
   isLoading: false,
   error: null,
 
@@ -280,33 +283,35 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       if (!currentTicket) notify("warning", "Aucun ticket en cours");
       return;
     }
+    if (currentTicket.status !== "CALLED") {
+      notify("warning", "Rappel indisponible", "Seul un ticket appelé peut être relancé.");
+      return;
+    }
+    if (!useOfflineStore.getState().isOnline) {
+      notify("warning", "Rappel indisponible hors ligne", "Reconnectez-vous avant de relancer le ticket.");
+      return;
+    }
 
     set({ isLoading: true });
 
     try {
-      if (useOfflineStore.getState().isOnline) {
-        try {
-          await apiService.recallTicket(currentTicket.id, counterId);
-        } catch (err) {
-          if (isNetworkFailure(err)) {
-            useOfflineStore.getState().setOnline(false);
-          } else if (!isTimeoutFailure(err)) {
-            throw err;
-          }
-          await useOfflineStore.getState().enqueue("RECALL_TICKET", {
-            ticket_id: currentTicket.id,
-            counter_id: counterId,
-          });
-        }
-      } else {
-        await useOfflineStore.getState().enqueue("RECALL_TICKET", {
-          ticket_id: currentTicket.id,
-          counter_id: counterId,
-        });
-      }
+      const result = await apiService.recallTicket(currentTicket.id, counterId);
+      set({ lastRecall: { ticketId: currentTicket.id, recallsLeft: result.recalls_left } });
       void playCallSound();
+      refreshQueues();
     } catch (err) {
-      notify("error", "Rappel impossible", errorMessage(err));
+      if (isNetworkFailure(err)) {
+        useOfflineStore.getState().setOnline(false);
+      }
+      if (isNetworkFailure(err) || isTimeoutFailure(err)) {
+        notify(
+          "warning",
+          "Résultat du rappel incertain",
+          "Vérifiez si le client a reçu l'appel avant de réessayer."
+        );
+      } else {
+        notify("error", "Rappel impossible", errorMessage(err));
+      }
     } finally {
       set({ isLoading: false });
     }
@@ -323,6 +328,21 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         "warning",
         "Action impossible",
         `Le ticket ${ticket.number} est au statut ${ticket.status}.`
+      );
+      return;
+    }
+
+    // Délai de grâce (spécification §3.1) : on refuse AVANT de toucher à l'état
+    // local. Sans ce contrôle, le poste vidait l'écran de service puis le
+    // restaurait sur le 409 — l'agent voyait clignoter son ticket pour rien.
+    if (!canMarkAbsent(ticket)) {
+      const restant = graceSecondsLeft(ticket);
+      notify(
+        "warning",
+        "Patientez avant de déclarer absent",
+        restant > 0
+          ? `Le client vient d'être appelé : le bouton s'ouvre dans ${restant} s.`
+          : "Le client vient d'être appelé : attendez la fin du délai de grâce."
       );
       return;
     }
@@ -356,10 +376,28 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
     try {
       if (useOfflineStore.getState().isOnline) {
         try {
-          await apiService.markTicketAbsent(ticketId, counterId);
-          await db.upsertTicket(absentTicket);
+          const result = await apiService.markTicketAbsent(ticketId, counterId);
+          // Le serveur est la seule autorité sur le compteur d'absences et sur
+          // la fenêtre de retour : on recopie ce qu'il renvoie au lieu de le
+          // déduire localement.
+          const stored: Ticket = {
+            ...absentTicket,
+            missed_count: result.missed_count ?? absentTicket.missed_count,
+            recovery_expires_at:
+              result.recovery_expires_at ?? absentTicket.recovery_expires_at,
+          };
+          await db.upsertTicket(stored);
+          set((state) => ({
+            heldTickets: state.heldTickets.map((t) => (t.id === stored.id ? stored : t)),
+          }));
           refreshQueues();
-          notify("info", `Ticket ${ticket.number} marqué absent`);
+          notify(
+            "info",
+            `Ticket ${ticket.number} marqué absent`,
+            result.recovery_allowed === false
+              ? "Le client a atteint le nombre d'absences autorisé : la reprise ne sera plus possible."
+              : undefined
+          );
           return;
         } catch (err) {
           if (isNetworkFailure(err)) {
@@ -382,7 +420,15 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         processingStartedAt: previousStartedAt,
         heldTickets: state.heldTickets.filter((t) => t.id !== absentTicket.id),
       }));
-      notify("error", "Impossible de marquer absent", errorMessage(err));
+      // Un refus du moteur (grâce, plafond) n'est pas une panne : c'est une
+      // règle. Il s'affiche en avertissement, avec le délai ou le compteur que
+      // le serveur a fourni, et non en « erreur » générique.
+      const notice = absenceErrorMessage(err);
+      notify(
+        notice ? "warning" : "error",
+        notice?.title ?? "Impossible de marquer absent",
+        notice?.message ?? errorMessage(err)
+      );
     } finally {
       set({ isLoading: false });
     }
@@ -470,10 +516,15 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
     if (get().isLoading) return false;
     set({ isLoading: true });
     try {
+      let degrade = false;
       if (ticket.status === "INCOMPLETE") {
         await apiService.requeueTicket(ticket.id);
       } else {
-        await apiService.returnTicketToQueue(ticket.id);
+        // `return` peut refuser pour trois raisons métier (fenêtre écoulée,
+        // plafond d'absences, autre ticket actif). Aucune n'est une panne :
+        // on les traite plus bas comme des règles, avec leur message.
+        const result = await apiService.returnTicketToQueue(ticket.id);
+        degrade = result.queue_degraded === true;
       }
       const updated: Ticket = {
         ...ticket,
@@ -481,16 +532,32 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
         called_at: undefined,
         served_at: undefined,
         closed_at: undefined,
+        // La fenêtre de reprise et la grâce n'ont plus de sens une fois le
+        // ticket revenu en file : le serveur les efface, on fait de même pour
+        // que l'écran ne montre pas une échéance périmée.
+        recovery_expires_at: undefined,
+        grace_expires_at: undefined,
       };
       await db.upsertTicket(updated);
       set((state) => ({
         heldTickets: state.heldTickets.filter((t) => t.id !== ticket.id),
       }));
       refreshQueues();
-      notify("success", `Ticket ${ticket.number} remis en file`);
+      notify(
+        degrade ? "warning" : "success",
+        `Ticket ${ticket.number} remis en file`,
+        degrade
+          ? "Position indisponible pour l'instant : la file sera rétablie automatiquement."
+          : undefined
+      );
       return true;
     } catch (err) {
-      notify("error", "Remise en file impossible", errorMessage(err));
+      const notice = absenceErrorMessage(err);
+      notify(
+        notice ? "warning" : "error",
+        notice?.title ?? "Remise en file impossible",
+        notice?.message ?? errorMessage(err)
+      );
       return false;
     } finally {
       set({ isLoading: false });
@@ -773,6 +840,8 @@ export const useTicketStore = create<TicketState>()((set, get) => ({
       currentTicket: null,
       processingStartedAt: null,
       recentTickets: [],
+      heldTickets: [],
+      lastRecall: null,
       isLoading: false,
       error: null,
     }),

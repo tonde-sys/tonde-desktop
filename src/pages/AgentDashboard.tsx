@@ -18,8 +18,8 @@ import { useAuthStore } from "../store/authStore";
 import { useOfflineStore } from "../store/offlineStore";
 import { useAgentShortcuts } from "../hooks/useKeyboardShortcuts";
 import { wsManager } from "../lib/WebSocketManager";
-import { IS_MOCK_MODE } from "../config/api";
 import { preloadSounds } from "../utils/sound";
+import { graceSecondsLeft } from "../utils/absence";
 import { formatDuration, formatTicketNumber } from "../utils/formatters";
 import {
   Phone,
@@ -45,6 +45,7 @@ export function AgentDashboard() {
     currentTicket,
     processingStartedAt,
     heldTickets,
+    lastRecall,
     isLoading,
     callNext,
     startServing,
@@ -87,6 +88,10 @@ export function AgentDashboard() {
     return Math.max(0, Math.floor((nowMs - startMs) / 1000));
   })();
 
+  // Décompte du délai de grâce : il s'appuie sur l'horloge `nowMs` déjà
+  // rafraîchie chaque seconde, donc aucun minuteur supplémentaire.
+  const graceLeft = currentTicket ? graceSecondsLeft(currentTicket, nowMs) : 0;
+
   // Préchargement sons au montage
   useEffect(() => {
     preloadSounds();
@@ -119,7 +124,7 @@ export function AgentDashboard() {
     }
   }, [user?.branch_id, loadQueues, loadHeldTickets]);
 
-  // Connexion WebSocket du guichet + polling de la file
+  // Connexion WebSocket du guichet
   useEffect(() => {
     if (user?.token && myCounter?.id && user.branch_id) {
       wsManager.connect(myCounter.id, user.token, user.branch_id);
@@ -282,11 +287,23 @@ export function AgentDashboard() {
                 {currentTicket.status === "CALLED" && (
                   <button
                     onClick={handleMarkAbsent}
-                    disabled={isLoading}
-                    className="btn-danger flex items-center gap-2"
+                    // Le bouton s'ouvre à la fin du délai de grâce (spécification
+                    // §3.1) : un agent ne peut pas déclarer absent un client
+                    // qu'il vient d'appeler. Le décompte est affiché pour qu'il
+                    // sache QUAND il pourra agir, au lieu de cliquer et de lire
+                    // un refus.
+                    disabled={isLoading || graceLeft > 0}
+                    title={
+                      graceLeft > 0
+                        ? t("ticket.absentGrace", { seconds: graceLeft })
+                        : undefined
+                    }
+                    className="btn-danger flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <UserX size={16} />
-                    {t("ticket.markAbsent")}
+                    {graceLeft > 0
+                      ? t("ticket.absentIn", { seconds: graceLeft })
+                      : t("ticket.markAbsent")}
                     <span className="kbd kbd-inverse">A</span>
                   </button>
                 )}
@@ -310,16 +327,29 @@ export function AgentDashboard() {
                   {t("ticket.transfer")}
                   <span className="kbd">T</span>
                 </button>
-                <button
-                  onClick={handleRecall}
-                  disabled={isLoading}
-                  className="btn-ghost flex items-center gap-2"
-                  hidden={!IS_MOCK_MODE}
-                >
-                  <RotateCcw size={14} />
-                  {t("ticket.recall")}
-                  <span className="kbd">R</span>
-                </button>
+                {currentTicket.status === "CALLED" && (
+                  <button
+                    onClick={handleRecall}
+                    disabled={
+                      isLoading ||
+                      !isOnline ||
+                      (lastRecall?.ticketId === currentTicket.id && lastRecall.recallsLeft === 0)
+                    }
+                    className="btn-ghost flex items-center gap-2"
+                    title={lastRecall?.ticketId === currentTicket.id
+                      ? t("ticket.recallsLeft", { count: lastRecall.recallsLeft })
+                      : undefined}
+                  >
+                    <RotateCcw size={14} />
+                    {t("ticket.recall")}
+                    {lastRecall?.ticketId === currentTicket.id && (
+                      <span className="text-xs text-text-secondary">
+                        {t("ticket.recallsLeft", { count: lastRecall.recallsLeft })}
+                      </span>
+                    )}
+                    <span className="kbd">R</span>
+                  </button>
+                )}
               </div>
             </>
           ) : (
