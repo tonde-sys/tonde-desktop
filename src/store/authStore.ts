@@ -36,10 +36,12 @@ interface AuthState {
   isInitializing: boolean;
   isInitialized: boolean;
   error: string | null;
+  errorKind: LoginErrorKind | null;
 
   // Actions
   initialize: () => Promise<void>;
   login: (credentials: LoginCredentials) => Promise<void>;
+  retryPendingLogin: () => Promise<void>;
   logout: (options?: LogoutOptions) => Promise<void>;
   refreshToken: () => Promise<void>;
   applyContext: (orgId: string, branchId: string) => void;
@@ -52,7 +54,19 @@ interface AuthState {
   isAdmin: () => boolean;
 }
 
+export type LoginErrorKind =
+  | "offline"
+  | "network"
+  | "credentials"
+  | "forbidden"
+  | "server"
+  | "unknown";
+
 const REFRESH_MARGIN_MS = 60_000;
+
+// Identifiants conservés en mémoire uniquement (jamais persistés) pour
+// reprendre le login dès que le réseau revient.
+let pendingCredentials: LoginCredentials | null = null;
 
 function isTokenExpired(expiresAt?: string): boolean {
   if (!expiresAt) return false;
@@ -61,23 +75,48 @@ function isTokenExpired(expiresAt?: string): boolean {
   return timestamp - REFRESH_MARGIN_MS <= Date.now();
 }
 
-function friendlyLoginError(err: unknown): string {
+function describeLoginError(err: unknown): {
+  message: string;
+  kind: LoginErrorKind;
+} {
   if (err instanceof ApiError) {
     if (err.status === 401) {
-      return "Email ou mot de passe incorrect.";
+      return {
+        message: "Email ou mot de passe incorrect.",
+        kind: "credentials",
+      };
     }
     if (err.status === 403) {
-      return err.message;
+      return { message: err.message, kind: "forbidden" };
     }
     if (err.status >= 500) {
-      return "Le serveur TONDE est momentanément indisponible.";
+      return {
+        message: "Le serveur TONDE est momentanément indisponible.",
+        kind: "server",
+      };
     }
     if (err.status === 0) {
-      return "Serveur TONDE injoignable. Sur Render, le réveil du service peut prendre jusqu'à 30 secondes.";
+      const offline =
+        !navigator.onLine || !useOfflineStore.getState().isOnline;
+      if (offline) {
+        return {
+          message:
+            "Cet ordinateur n'a pas de connexion Internet. La connexion reprendra automatiquement.",
+          kind: "offline",
+        };
+      }
+      return {
+        message:
+          "Serveur TONDE injoignable. Sur Render, le réveil du service peut prendre jusqu'à 30 secondes.",
+        kind: "network",
+      };
     }
-    return err.message;
+    return { message: err.message, kind: "unknown" };
   }
-  return "Serveur TONDE injoignable. Vérifiez votre connexion.";
+  return {
+    message: "Serveur TONDE injoignable. Vérifiez votre connexion.",
+    kind: "unknown",
+  };
 }
 
 // Le service Render gratuit s'endort : le premier appel peut être coupé
@@ -116,6 +155,7 @@ export const useAuthStore = create<AuthState>()(
       isInitializing: false,
       isInitialized: false,
       error: null,
+      errorKind: null,
 
       initialize: async () => {
         if (get().isInitialized || get().isInitializing) return;
@@ -206,11 +246,12 @@ export const useAuthStore = create<AuthState>()(
       },
 
       login: async (credentials) => {
-        set({ isLoading: true, isWaking: false, error: null });
+        set({ isLoading: true, isWaking: false, error: null, errorKind: null });
         try {
           const user = await loginWithWakeRetry(credentials, () =>
             set({ isWaking: true })
           );
+          pendingCredentials = null;
 
           // Écriture de cache hors du chemin critique : le login réussit
           // même si le coffre ou SQLite est indisponible.
@@ -239,6 +280,7 @@ export const useAuthStore = create<AuthState>()(
             isLoading: false,
             isWaking: false,
             error: null,
+            errorKind: null,
           });
 
           // Les actions hors ligne sont rattachées à cet agent : elles ne
@@ -248,14 +290,27 @@ export const useAuthStore = create<AuthState>()(
             branchId: user.branch_id || getApiContext()?.branchId || "",
           });
         } catch (err) {
+          const failure = describeLoginError(err);
+          // Coupure réseau : on garde les identifiants en mémoire pour
+          // reprendre automatiquement au retour de la connexion.
+          pendingCredentials =
+            failure.kind === "offline" || failure.kind === "network"
+              ? credentials
+              : null;
           set({
             user: null,
             isAuthenticated: false,
             isLoading: false,
             isWaking: false,
-            error: friendlyLoginError(err),
+            error: failure.message,
+            errorKind: failure.kind,
           });
         }
+      },
+
+      retryPendingLogin: async () => {
+        if (!pendingCredentials || get().isLoading) return;
+        await get().login(pendingCredentials);
       },
 
       logout: async (options) => {
@@ -282,12 +337,14 @@ export const useAuthStore = create<AuthState>()(
         useTicketStore.getState().reset();
         useQueueStore.getState().reset();
         useOfflineStore.getState().setActor(null);
+        pendingCredentials = null;
 
         set({
           user: null,
           isAuthenticated: false,
           isLoading: false,
           error: null,
+          errorKind: null,
         });
       },
 
@@ -334,7 +391,7 @@ export const useAuthStore = create<AuthState>()(
         }
       },
 
-      clearError: () => set({ error: null }),
+      clearError: () => set({ error: null, errorKind: null }),
 
       hasRole: (...roles) => {
         const { user } = get();

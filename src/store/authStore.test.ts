@@ -56,6 +56,7 @@ describe("authStore.login — cold start Render", () => {
       isInitializing: false,
       isInitialized: false,
       error: null,
+      errorKind: null,
     });
   });
 
@@ -86,6 +87,7 @@ describe("authStore.login — cold start Render", () => {
     expect(useAuthStore.getState().error).toBe(
       "Email ou mot de passe incorrect."
     );
+    expect(useAuthStore.getState().errorKind).toBe("credentials");
   });
 
   it("abandonne après trois réessais et affiche l'erreur réseau", async () => {
@@ -98,7 +100,51 @@ describe("authStore.login — cold start Render", () => {
 
     expect(loginMock).toHaveBeenCalledTimes(4);
     expect(useAuthStore.getState().error).toContain("injoignable");
+    expect(useAuthStore.getState().errorKind).toBe("network");
     expect(useAuthStore.getState().isLoading).toBe(false);
+    vi.useRealTimers();
+  });
+
+  it("affiche un message dédié quand le poste est hors ligne", async () => {
+    const onLine = vi
+      .spyOn(navigator, "onLine", "get")
+      .mockReturnValue(false);
+    vi.useFakeTimers();
+    loginMock.mockRejectedValue(new ApiError("down", 0, "NETWORK"));
+
+    const pending = useAuthStore.getState().login(credentials);
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(useAuthStore.getState().errorKind).toBe("offline");
+    expect(useAuthStore.getState().error).toContain("connexion Internet");
+
+    onLine.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("reprend le login automatiquement au retour du réseau", async () => {
+    vi.useFakeTimers();
+    loginMock.mockRejectedValue(new ApiError("coupure", 0, "NETWORK"));
+
+    const pending = useAuthStore.getState().login(credentials);
+    await vi.runAllTimersAsync();
+    await pending;
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(false);
+    expect(useAuthStore.getState().errorKind).toBe("network");
+
+    // Le réseau revient : nouvel essai avec les identifiants en mémoire.
+    loginMock.mockResolvedValueOnce(user);
+    await useAuthStore.getState().retryPendingLogin();
+
+    expect(useAuthStore.getState().isAuthenticated).toBe(true);
+    expect(useAuthStore.getState().errorKind).toBeNull();
+
+    // Identifiants oubliés après succès : plus aucune reprise.
+    const callsAfterSuccess = loginMock.mock.calls.length;
+    await useAuthStore.getState().retryPendingLogin();
+    expect(loginMock.mock.calls.length).toBe(callsAfterSuccess);
     vi.useRealTimers();
   });
 });

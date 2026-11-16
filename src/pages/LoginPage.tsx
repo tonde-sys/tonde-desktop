@@ -9,6 +9,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useTranslation } from "react-i18next";
 import { useAuthStore } from "../store/authStore";
+import { useOfflineStore } from "../store/offlineStore";
 import { API_HOST, IS_MOCK_MODE } from "../config/api";
 import { Eye, EyeOff, LogIn } from "lucide-react";
 import pkg from "../../package.json";
@@ -23,6 +24,7 @@ type LoginForm = z.infer<typeof loginSchema>;
 export function LoginPage() {
   const { t } = useTranslation();
   const { login, isLoading, isWaking, error, clearError } = useAuthStore();
+  const isOnline = useOfflineStore((s) => s.isOnline);
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -63,6 +65,13 @@ export function LoginPage() {
         {error && (
           <div className="mb-4 px-4 py-3 bg-rose/10 border border-rose/30 rounded-btn text-rose text-sm">
             {error}
+          </div>
+        )}
+
+        {/* Poste sans Internet : la connexion reprendra seule */}
+        {!isOnline && (
+          <div className="mb-4 px-4 py-3 bg-amber/10 border border-amber/30 rounded-btn text-amber text-sm">
+            {t("auth.offlineNotice")}
           </div>
         )}
 

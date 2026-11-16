@@ -51,6 +51,8 @@ function AppRouter() {
   useEffect(() => {
     const handleOnline = () => {
       void setOnline(true);
+      // Login interrompu par une coupure : reprise automatique.
+      void useAuthStore.getState().retryPendingLogin();
     };
     const handleOffline = () => {
       void setOnline(false);

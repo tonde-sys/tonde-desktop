@@ -11,6 +11,7 @@
     "loginButton": "Sign in",
     "loggingIn": "Signing in...",
     "wakingServer": "Waking the TONDE server...",
+    "offlineNotice": "No Internet connection. Sign-in will resume automatically when the network returns.",
     "server": "Server: {{host}}",
     "coldStart": "First call: the server may take ~30 s to wake up",
     "mockServer": "Local demo mode — simulated API",

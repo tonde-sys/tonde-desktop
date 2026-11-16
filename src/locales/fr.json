@@ -11,6 +11,7 @@
     "loginButton": "Se connecter",
     "loggingIn": "Connexion...",
     "wakingServer": "Réveil du serveur TONDE...",
+    "offlineNotice": "Aucune connexion Internet. La connexion se fera automatiquement dès le retour du réseau.",
     "server": "Serveur : {{host}}",
     "coldStart": "Premier appel : le réveil du serveur peut prendre ~30 s",
     "mockServer": "Mode démo local — API simulée",
