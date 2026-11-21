@@ -33,6 +33,7 @@ import {
   Clock,
   FileWarning,
   X,
+  ShieldCheck,
 } from "lucide-react";
 
 export function AgentDashboard() {
@@ -248,6 +249,22 @@ export function AgentDashboard() {
                   <p className="text-text-primary font-medium text-base mt-3">
                     {currentServiceName}
                   </p>
+                )}
+                {/* Identité du client — anti-fraude : le guichetier vérifie
+                    que la personne présente correspond à celle qui a pris le
+                    ticket. */}
+                {(currentTicket.client_name || currentTicket.client_phone) && (
+                  <div className="mt-3 inline-flex items-center gap-2 px-3 py-1.5 rounded-btn bg-cyan/10 border border-cyan/30">
+                    <ShieldCheck size={14} className="text-cyan" />
+                    <span className="text-sm text-text-primary font-medium">
+                      {currentTicket.client_name ?? "Client"}
+                    </span>
+                    {currentTicket.client_phone && (
+                      <span className="text-xs text-text-secondary font-mono">
+                        {currentTicket.client_phone}
+                      </span>
+                    )}
+                  </div>
                 )}
                 <div className="flex items-center justify-center gap-2 text-text-secondary text-sm mt-2">
                   <span>

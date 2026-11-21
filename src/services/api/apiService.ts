@@ -786,6 +786,9 @@ interface BackendTicket {
   missed_count?: number | null;
   queue_sequence?: number | null;
   queue_degraded?: boolean | null;
+  // Identité du client (anti-fraude — renseignée côté staff)
+  client_name?: string | null;
+  client_phone?: string | null;
 }
 
 interface BackendService {
@@ -817,6 +820,8 @@ interface BackendCallNext {
   ticket_number?: string;
   counter_name?: string;
   message?: string;
+  client_name?: string | null;
+  client_phone?: string | null;
 }
 
 interface BackendEmployee {
@@ -925,6 +930,8 @@ function mapTicket(dto: BackendTicket): Ticket {
     missed_count: dto.missed_count ?? undefined,
     queue_sequence: dto.queue_sequence ?? undefined,
     queue_degraded: dto.queue_degraded ?? undefined,
+    client_name: dto.client_name ?? undefined,
+    client_phone: dto.client_phone ?? undefined,
   };
 }
 
@@ -1241,6 +1248,10 @@ export const apiService = {
       branch_id: context.branchId,
       created_at: now,
       called_at: now,
+      // Identité du client depuis call-next (au cas où le GET /tickets/{id}
+      // qui suit échoue — le guichetier a quand même l'info anti-fraude).
+      client_name: result.client_name ?? undefined,
+      client_phone: result.client_phone ?? undefined,
     };
 
     try {

@@ -49,6 +49,12 @@ export interface Ticket {
   // Vrai quand le ticket existe en base mais n'a pas pu entrer dans la file
   // Redis : `position` vaut alors 0 et il ne faut pas l'afficher.
   queue_degraded?: boolean;
+
+  // ── Identité du client (anti-fraude) ──────────────────────
+  // Affichés au guichetier lors de l'appel pour vérifier que la personne
+  // présente correspond à celle qui a pris le ticket.
+  client_name?: string;
+  client_phone?: string;
 }
 
 // ------ COUNTER (GUICHET) ------
