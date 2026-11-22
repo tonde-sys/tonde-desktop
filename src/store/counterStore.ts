@@ -20,7 +20,7 @@ interface CounterState {
   // Actions
   loadMyCounter: (counterId: string) => Promise<void>;
   loadAllCounters: (branchId: string) => Promise<void>;
-  pauseCounter: (counterId: string) => Promise<void>;
+  pauseCounter: (counterId: string, pausedUntil?: string) => Promise<void>;
   resumeCounter: (counterId: string) => Promise<void>;
   closeCounter: (counterId: string) => Promise<void>;
   openCounter: (counterId: string, agentId: string) => Promise<boolean>;
@@ -75,30 +75,46 @@ export const useCounterStore = create<CounterState>()(
         }
       },
 
-      pauseCounter: async (counterId) => {
+      pauseCounter: async (counterId, pausedUntil) => {
         const { isOnline, enqueue } = useOfflineStore.getState();
         const current = get().myCounter;
 
         set((state) => ({
           myCounter: state.myCounter
-            ? { ...state.myCounter, status: "PAUSED" }
+            ? {
+                ...state.myCounter,
+                status: "PAUSED",
+                paused_until: pausedUntil ?? null,
+              }
             : null,
           allCounters: state.allCounters.map((c) =>
-            c.id === counterId ? { ...c, status: "PAUSED" } : c
+            c.id === counterId
+              ? { ...c, status: "PAUSED", paused_until: pausedUntil ?? null }
+              : c
           ),
         }));
         if (current) {
-          await db.upsertCounter({ ...current, status: "PAUSED" });
+          await db.upsertCounter({
+            ...current,
+            status: "PAUSED",
+            paused_until: pausedUntil ?? null,
+          });
         }
 
         if (isOnline) {
           try {
-            await apiService.pauseCounter(counterId);
+            await apiService.pauseCounter(counterId, pausedUntil);
           } catch {
-            await enqueue("PAUSE_COUNTER", { counter_id: counterId });
+            await enqueue("PAUSE_COUNTER", {
+              counter_id: counterId,
+              paused_until: pausedUntil ?? null,
+            });
           }
         } else {
-          await enqueue("PAUSE_COUNTER", { counter_id: counterId });
+          await enqueue("PAUSE_COUNTER", {
+            counter_id: counterId,
+            paused_until: pausedUntil ?? null,
+          });
         }
       },
 
@@ -108,14 +124,20 @@ export const useCounterStore = create<CounterState>()(
 
         set((state) => ({
           myCounter: state.myCounter
-            ? { ...state.myCounter, status: "OPEN" }
+            ? { ...state.myCounter, status: "OPEN", paused_until: null }
             : null,
           allCounters: state.allCounters.map((c) =>
-            c.id === counterId ? { ...c, status: "OPEN" } : c
+            c.id === counterId
+              ? { ...c, status: "OPEN", paused_until: null }
+              : c
           ),
         }));
         if (current) {
-          await db.upsertCounter({ ...current, status: "OPEN" });
+          await db.upsertCounter({
+            ...current,
+            status: "OPEN",
+            paused_until: null,
+          });
         }
 
         if (isOnline) {

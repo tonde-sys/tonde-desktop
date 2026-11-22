@@ -266,16 +266,22 @@ const mockApi = {
     return [...MOCK_COUNTERS];
   },
 
-  async pauseCounter(counterId: string): Promise<void> {
+  async pauseCounter(counterId: string, pausedUntil?: string): Promise<void> {
     await delay(200);
     const counter = MOCK_COUNTERS.find(c => c.id === counterId);
-    if (counter) counter.status = "PAUSED";
+    if (counter) {
+      counter.status = "PAUSED";
+      counter.paused_until = pausedUntil ?? null;
+    }
   },
 
   async resumeCounter(counterId: string): Promise<void> {
     await delay(200);
     const counter = MOCK_COUNTERS.find(c => c.id === counterId);
-    if (counter) counter.status = "OPEN";
+    if (counter) {
+      counter.status = "OPEN";
+      counter.paused_until = null;
+    }
   },
 
   async closeCounter(counterId: string): Promise<void> {
@@ -738,6 +744,8 @@ interface BackendCounter {
   description: string | null;
   is_open: boolean;
   is_active: boolean;
+  is_paused?: boolean;
+  paused_until?: string | null;
   current_ticket_id: string | null;
 }
 
@@ -861,7 +869,8 @@ function mapCounter(dto: BackendCounter): Counter {
     number: counterNumber(dto.name),
     name: dto.name,
     description: dto.description ?? undefined,
-    status: dto.is_open ? "OPEN" : "CLOSED",
+    status: dto.is_paused ? "PAUSED" : dto.is_open ? "OPEN" : "CLOSED",
+    paused_until: dto.paused_until ?? null,
     // Le backend ne rattache pas de services à un guichet : toutes les
     // files de l'agence sont candidates à l'appel.
     service_ids: [],
@@ -1090,6 +1099,37 @@ async function closeCounterRemote(counterId: string): Promise<void> {
     );
   } catch (err) {
     if (err instanceof ApiError && err.code === "COUNTER_ALREADY_CLOSED") return;
+    throw err;
+  }
+}
+
+async function pauseCounterRemote(
+  counterId: string,
+  pausedUntil?: string
+): Promise<void> {
+  const context = requireApiContext();
+  try {
+    await httpClient.post(
+      `/organizations/${context.orgId}/branches/${context.branchId}/counters/${counterId}/pause`,
+      pausedUntil ? { paused_until: pausedUntil } : undefined
+    );
+  } catch (err) {
+    if (
+      err instanceof ApiError &&
+      err.code === "COUNTER_ALREADY_PAUSED"
+    ) return;
+    throw err;
+  }
+}
+
+async function resumeCounterRemote(counterId: string): Promise<void> {
+  const context = requireApiContext();
+  try {
+    await httpClient.post(
+      `/organizations/${context.orgId}/branches/${context.branchId}/counters/${counterId}/resume`
+    );
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "COUNTER_NOT_PAUSED") return;
     throw err;
   }
 }
@@ -1464,17 +1504,14 @@ export const apiService = {
     return (data.items ?? []).map(mapCounter);
   },
 
-  async pauseCounter(counterId: string): Promise<void> {
-    if (apiImpl) return apiImpl.pauseCounter(counterId);
-    // Le backend ne connaît que ouvert/fermé : la pause ferme le guichet.
-    await closeCounterRemote(counterId);
+  async pauseCounter(counterId: string, pausedUntil?: string): Promise<void> {
+    if (apiImpl) return apiImpl.pauseCounter(counterId, pausedUntil);
+    await pauseCounterRemote(counterId, pausedUntil);
   },
 
   async resumeCounter(counterId: string): Promise<void> {
     if (apiImpl) return apiImpl.resumeCounter(counterId);
-    // Reprise de service : si le guichet est déjà ouvert côté serveur,
-    // c'est l'état souhaité (passation), pas une erreur.
-    await openCounterRemote(counterId, true);
+    await resumeCounterRemote(counterId);
   },
 
   async closeCounter(counterId: string): Promise<void> {

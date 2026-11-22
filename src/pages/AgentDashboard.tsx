@@ -195,7 +195,11 @@ export function AgentDashboard() {
     if (myCounter.status === "PAUSED") {
       void resumeCounter(myCounter.id);
     } else {
-      void pauseCounter(myCounter.id);
+      // Une pause annonce toujours une heure de reprise estimée : sans elle,
+      // les clients ne peuvent pas distinguer une courte pause d'un guichet
+      // abandonné. L'agent peut ajuster depuis l'API si la pause se prolonge.
+      const until = new Date(Date.now() + 30 * 60 * 1000).toISOString();
+      void pauseCounter(myCounter.id, until);
     }
   };
 
@@ -212,6 +216,14 @@ export function AgentDashboard() {
                 </p>
                 <p className="text-text-secondary text-xs mt-0.5">
                   {t("counter.pausedHint")}
+                  {myCounter.paused_until
+                    ? ` ${t("counter.pausedUntil", {
+                        time: new Date(myCounter.paused_until).toLocaleTimeString(
+                          [],
+                          { hour: "2-digit", minute: "2-digit" }
+                        ),
+                      })}`
+                    : ""}
                 </p>
               </div>
               <button

@@ -29,6 +29,7 @@
     "pause": "Pause",
     "resume": "Resume",
     "pausedHint": "No more customers are called at this counter.",
+    "pausedUntil": "Resume expected at {{time}}",
     "assigned": "Assigned",
     "notAssigned": "Assigned to another counter",
     "status": {

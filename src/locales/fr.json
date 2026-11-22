@@ -29,6 +29,7 @@
     "pause": "Mettre en pause",
     "resume": "Reprendre",
     "pausedHint": "Les clients ne sont plus appelés sur ce guichet.",
+    "pausedUntil": "Reprise annoncée à {{time}}",
     "assigned": "Attribué",
     "notAssigned": "Attribué à un autre poste",
     "status": {

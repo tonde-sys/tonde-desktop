@@ -72,6 +72,8 @@ export interface Counter {
   agent_name?: string;
   branch_id: string;
   is_active?: boolean;
+  /** Heure ISO de reprise annoncée aux clients quand le guichet est en pause. */
+  paused_until?: string | null;
   current_ticket?: Ticket;
   current_ticket_id?: string | null;
 }
