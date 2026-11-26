@@ -163,6 +163,10 @@ export const useOfflineStore = create<OfflineState>()((set, get) => ({
     const recovered: SyncQueueItem[] = [];
     for (const item of items) {
       if (item.status === "DONE") continue;
+      if (item.action === "RECALL_TICKET") {
+        await db.updateSyncItemStatus(item.id, "DONE", new Date().toISOString());
+        continue;
+      }
       if (item.status === "SYNCING") {
         // Crash en pleine synchronisation : l'action redevient PENDING.
         // Les commandes backend sont idempotentes par ticket.
@@ -249,7 +253,7 @@ async function dispatchSyncAction(item: SyncQueueItem): Promise<void> {
       await apiService.startServingTicket(p.ticket_id as string, p.counter_id as string);
       break;
     case "RECALL_TICKET":
-      await apiService.recallTicket(p.ticket_id as string, p.counter_id as string);
+      // Legacy entries are discarded to avoid sending duplicate SMS.
       break;
     case "MARK_ABSENT":
       await apiService.markTicketAbsent(p.ticket_id as string, p.counter_id as string);

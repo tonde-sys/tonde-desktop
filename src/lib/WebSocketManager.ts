@@ -1,8 +1,6 @@
 // ============================================================
 // TONDE DESKTOP — WebSocket Manager
-// Guichet : canal /tickets/ws/counter/{id} (keepalive)
-// Le backend ne pousse pas les événements métier aux guichets :
-// la file est rafraîchie par polling tant que la session est ouverte.
+// Guichet : canal /tickets/ws/counter/{id} avec événements métier et keepalive.
 // ============================================================
 
 import type {
@@ -18,10 +16,8 @@ import { useCounterStore } from "../store/counterStore";
 
 type EventHandler<T = unknown> = (payload: T) => void;
 
-const MAX_RETRIES = 10;
 const BASE_DELAY_MS = 1000;
 const MAX_DELAY_MS = 30000;
-const POLL_INTERVAL_MS = 7000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -34,10 +30,11 @@ class WebSocketManager {
   private token: string | null = null;
   private retryCount = 0;
   private retryTimeout: ReturnType<typeof setTimeout> | null = null;
-  private pollInterval: ReturnType<typeof setInterval> | null = null;
   private isIntentionallyClosed = false;
   private handlers = new Map<WebSocketEventType, Set<EventHandler>>();
   private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private refreshPromise: Promise<void> | null = null;
+  private refreshAgain = false;
 
   // ---- Public API ----
 
@@ -68,9 +65,6 @@ class WebSocketManager {
     this.isIntentionallyClosed = false;
     this.retryCount = 0;
 
-    // Le canal guichet ne reçoit que le keepalive : la file est
-    // rafraîchie par polling, même WebSocket connecté.
-    this._startPolling();
     this._connect();
   }
 
@@ -122,7 +116,7 @@ class WebSocketManager {
       useOfflineStore.getState().setOnline(true);
       useOfflineStore.getState().setConnectionStatus("CONNECTED");
       this._startPing();
-      void this._poll();
+      void this._refreshQueues();
     };
 
     this.ws.onmessage = (event) => {
@@ -178,15 +172,15 @@ class WebSocketManager {
   }
 
   private _dispatch(event: WebSocketEvent): void {
-    const handlers = this.handlers.get(event.type);
-    if (!handlers) return;
-
     switch (event.type) {
       case "QUEUE_UPDATE": {
         const p = event.payload as QueueUpdatePayload;
         useQueueStore.getState().updateQueueFromWS(p.service_id, p.tickets, p.waiting_count);
         break;
       }
+      case "COUNTER_QUEUE_CHANGED":
+        void this._refreshQueues();
+        break;
       case "COUNTER_STATUS": {
         const p = event.payload as CounterStatusPayload;
         useCounterStore.getState().updateCounterFromWS(p.counter);
@@ -194,20 +188,12 @@ class WebSocketManager {
       }
     }
 
-    handlers.forEach((h) => h(event.payload));
+    this.handlers.get(event.type)?.forEach((handler) => handler(event.payload));
   }
 
   private _scheduleReconnect(): void {
-    if (this.retryCount >= MAX_RETRIES) {
-      console.warn("[WS] Max retries reached. Staying in polling fallback.");
-      if (useOfflineStore.getState().isOnline) {
-        useOfflineStore.getState().setConnectionStatus("CONNECTED");
-      }
-      return;
-    }
-
     const delay = Math.min(
-      BASE_DELAY_MS * Math.pow(2, this.retryCount) + Math.random() * 1000,
+      BASE_DELAY_MS * Math.pow(2, Math.min(this.retryCount, 5)) + Math.random() * 1000,
       MAX_DELAY_MS
     );
 
@@ -235,41 +221,39 @@ class WebSocketManager {
     }
   }
 
-  // ---- Polling de la file (le backend ne pousse rien aux guichets) ----
-
-  private _startPolling(): void {
-    this._stopPolling();
-    console.info("[WS] Queue polling enabled");
-    this.pollInterval = setInterval(() => {
-      void this._poll();
-    }, POLL_INTERVAL_MS);
-  }
-
-  private _stopPolling(): void {
-    if (this.pollInterval) {
-      clearInterval(this.pollInterval);
-      this.pollInterval = null;
-    }
-  }
-
-  private async _poll(): Promise<void> {
+  private async _refreshQueues(): Promise<void> {
     if (!this.branchId) return;
-    try {
-      const { loadQueues } = useQueueStore.getState();
-      await loadQueues(this.branchId);
+    if (this.refreshPromise) {
+      this.refreshAgain = true;
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = (async () => {
+      while (this.branchId) {
+        const branchId = this.branchId;
+        this.refreshAgain = false;
+        await useQueueStore.getState().loadQueues(branchId);
+        if (!this.refreshAgain) break;
+      }
+
       const offline = useOfflineStore.getState();
       if (offline.isOnline && offline.connectionStatus === "RECONNECTING") {
         offline.setConnectionStatus("CONNECTED");
       }
+    })();
+
+    try {
+      await this.refreshPromise;
     } catch {
-      // Still offline — polling will retry
+      // The last cached snapshot remains visible if the reload fails.
+    } finally {
+      this.refreshPromise = null;
     }
   }
 
   private _clearTimers(): void {
     if (this.retryTimeout) clearTimeout(this.retryTimeout);
     this.retryTimeout = null;
-    this._stopPolling();
     this._stopPing();
   }
 }

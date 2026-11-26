@@ -33,3 +33,8 @@ src-tauri/target/
 
 # Kiro (optionnel — garder les steering files)
 # .kiro/
+
+# Outillage local (agents, hooks, configuration de poste)
+.impeccable/
+.qoder/
+.github/hooks/
