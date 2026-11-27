@@ -10,7 +10,7 @@ const ENV: Environment =
 
 // API pilote déployée sur Render (Frankfurt, plan gratuit).
 // Le service s'endort après 15 min : le premier appel peut dépasser 8 s.
-const RENDER_API_URL = "https://tonde-api-pilot-fx1j.onrender.com";
+const RENDER_API_URL = "https://tonde-api-bdi.onrender.com";
 
 const API_URLS: Record<Environment, string> = {
   development: "http://localhost:8000",

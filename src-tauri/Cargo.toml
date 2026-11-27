@@ -1,6 +1,6 @@
 [package]
 name = "tonde-desktop"
-version = "0.3.0"
+version = "0.3.1"
 description = "TONDE Desktop — Application guichetier Tauri"
 authors = ["Vital"]
 edition = "2021"
